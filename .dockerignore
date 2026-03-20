@@ -1,0 +1,36 @@
+# Terraform state and cache
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/tfplan
+
+# Generated files
+terraform/modules/vault-nodes/generated/
+
+# Local overrides
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docs (not needed in container)
+docs/
+README.md
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore

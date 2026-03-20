@@ -1,0 +1,1084 @@
+{
+  "uid": "vault-cluster-overview",
+  "title": "Vault Cluster Overview",
+  "description": "HashiCorp Vault cluster health — red flags at a glance, details on drill-down",
+  "tags": ["vault", "infrastructure"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "cw_datasource",
+        "label": "CloudWatch",
+        "type": "datasource",
+        "query": "cloudwatch",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "region",
+        "label": "AWS Region",
+        "type": "custom",
+        "query": "us-east-1,us-east-2,us-west-2",
+        "current": { "text": "us-east-1", "value": "us-east-1" },
+        "hide": 0
+      },
+      {
+        "name": "cluster",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(vault_core_unsealed, cluster)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(vault_core_unsealed{cluster=~\"$cluster\"}, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "nlb",
+        "label": "NLB ARN Suffix",
+        "description": "Auto-populated from CloudWatch dimensions (e.g. net/vault-nonprod-test/abc123)",
+        "type": "query",
+        "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+        "query": "dimension_values($region, AWS/NetworkELB, ActiveFlowCount, LoadBalancer)",
+        "regex": "/vault-/",
+        "refresh": 1,
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "target_group",
+        "label": "Target Group ARN Suffix",
+        "description": "Auto-populated from CloudWatch dimensions (e.g. targetgroup/vault-nonprod-test/def456)",
+        "type": "query",
+        "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+        "query": "dimension_values($region, AWS/NetworkELB, HealthyHostCount, TargetGroup, LoadBalancer, $nlb)",
+        "refresh": 1,
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Health at a Glance",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Sealed Nodes",
+      "description": "Number of sealed nodes. Should always be 0.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "count(vault_core_unsealed{instance=~\"$instance\", cluster=~\"$cluster\"} == 0) OR vector(0)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Has Leader",
+      "description": "Whether any node is the active leader. Must be 1.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 3, "y": 1 },
+      "targets": [
+        {
+          "expr": "max(vault_core_active{instance=~\"$instance\", cluster=~\"$cluster\"}) OR vector(0)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NO LEADER", "color": "red" }, "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Audit Failures",
+      "description": "Audit log write failures. Any non-zero value means audit logging is broken — Vault will stop processing requests.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(vault_audit_log_request_failure{instance=~\"$instance\", cluster=~\"$cluster\"}) OR vector(0)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Request p99",
+      "description": "99th percentile request latency. Warn >250ms, Critical >1s.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 9, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vault_core_handle_request_duration_seconds_bucket{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])) by (le))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 0.25, "color": "yellow" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "value" }
+    },
+    {
+      "title": "Raft Commit",
+      "description": "Raft commit latency p99. Warn >25ms, Critical >500ms.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "expr": "max(vault_raft_commitTime{quantile=\"0.99\", instance=~\"$instance\", cluster=~\"$cluster\"})",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 25, "color": "yellow" }, { "value": 500, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "value" }
+    },
+    {
+      "title": "Leader Changes",
+      "description": "Leadership transitions in the last 5 minutes. Non-zero means failover occurred.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 15, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(changes(vault_core_active{instance=~\"$instance\", cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 3, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "EC2 Status",
+      "description": "EC2 status check failures across all Vault nodes. Any non-zero = instance or host problem.",
+      "type": "stat",
+      "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/EC2",
+          "metricName": "StatusCheckFailed",
+          "dimensions": { "InstanceId": ["$instance"] },
+          "statistic": "Maximum",
+          "period": "300",
+          "region": "$region",
+          "matchExact": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "NLB Healthy",
+      "description": "Healthy host count in NLB target group. Should be 3. Yellow <3, Red =0.",
+      "type": "stat",
+      "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+      "gridPos": { "h": 5, "w": 3, "x": 21, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/NetworkELB",
+          "metricName": "HealthyHostCount",
+          "dimensions": {
+            "LoadBalancer": ["$nlb"],
+            "TargetGroup": ["$target_group"]
+          },
+          "statistic": "Minimum",
+          "period": "300",
+          "region": "$region"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "—",
+          "thresholds": { "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "yellow" }, { "value": 3, "color": "green" }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Node Status",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "collapsed": false
+    },
+    {
+      "title": "Seal Status per Node",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 3, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        {
+          "expr": "vault_core_unsealed{instance=~\"$instance\", cluster=~\"$cluster\"}",
+          "legendFormat": "{{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "SEALED", "color": "red" }, "1": { "text": "UNSEALED", "color": "green" } } }
+          ],
+          "thresholds": { "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "value_and_name" }
+    },
+    {
+      "title": "Vault Version",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 3, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        {
+          "expr": "vault_version_info{instance=~\"$instance\", cluster=~\"$cluster\"}",
+          "legendFormat": "{{ version }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "name" }
+    },
+    {
+      "title": "EC2 Instances",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "CPU Utilization",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 11 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/EC2",
+              "metricName": "CPUUtilization",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Average",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 70, "color": "rgba(255, 152, 48, 0.1)" }, { "value": 90, "color": "rgba(242, 73, 92, 0.1)" }] }
+            }
+          }
+        },
+        {
+          "title": "Network In / Out",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 11 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/EC2",
+              "metricName": "NetworkIn",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Average",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} in"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/EC2",
+              "metricName": "NetworkOut",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Average",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} out"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "EBS Read / Write Ops",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 11 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/EC2",
+              "metricName": "EBSReadOps",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} read"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/EC2",
+              "metricName": "EBSWriteOps",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} write"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Status Check Failures",
+          "description": "Per-node breakdown: instance check (OS/software) and system check (AWS hardware).",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/EC2",
+              "metricName": "StatusCheckFailed_Instance",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Maximum",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} instance"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/EC2",
+              "metricName": "StatusCheckFailed_System",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Maximum",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }} system"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 1, "color": "rgba(242, 73, 92, 0.2)" }] }
+            }
+          }
+        },
+        {
+          "title": "CPU Credit Balance",
+          "description": "Only relevant for burstable instance types (t3, t4g). Ignore if using m-series.",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/EC2",
+              "metricName": "CPUCreditBalance",
+              "dimensions": { "InstanceId": ["$instance"] },
+              "statistic": "Minimum",
+              "period": "300",
+              "region": "$region",
+              "matchExact": false,
+              "alias": "{{ InstanceId }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 10, "color": "red" }, { "value": 30, "color": "yellow" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "NLB",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Healthy / Unhealthy Hosts",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "HealthyHostCount",
+              "dimensions": {
+                "LoadBalancer": ["$nlb"],
+                "TargetGroup": ["$target_group"]
+              },
+              "statistic": "Minimum",
+              "period": "300",
+              "region": "$region",
+              "alias": "Healthy"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "UnHealthyHostCount",
+              "dimensions": {
+                "LoadBalancer": ["$nlb"],
+                "TargetGroup": ["$target_group"]
+              },
+              "statistic": "Maximum",
+              "period": "300",
+              "region": "$region",
+              "alias": "Unhealthy"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Healthy" },
+                "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Unhealthy" },
+                "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Active Flow Count",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "ActiveFlowCount",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Average",
+              "period": "300",
+              "region": "$region",
+              "alias": "Active Flows"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "NewFlowCount",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "alias": "New Flows"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Processed Bytes",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "ProcessedBytes",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "alias": "Processed Bytes"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "TCP Target Resets",
+          "description": "Resets sent from targets to clients. Spikes may indicate Vault nodes dropping connections.",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "TCP_Target_Reset_Count",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "alias": "Target Resets"
+            },
+            {
+              "refId": "B",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "TCP_Client_Reset_Count",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "alias": "Client Resets"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 100, "color": "yellow" }] }
+            }
+          }
+        },
+        {
+          "title": "Target Connection Errors",
+          "description": "Connections that failed to establish to targets. Non-zero = Vault node unreachable.",
+          "type": "timeseries",
+          "datasource": { "type": "cloudwatch", "uid": "${cw_datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "targets": [
+            {
+              "refId": "A",
+              "namespace": "AWS/NetworkELB",
+              "metricName": "TargetTLSNegotiationErrorCount",
+              "dimensions": { "LoadBalancer": ["$nlb"] },
+              "statistic": "Sum",
+              "period": "300",
+              "region": "$region",
+              "alias": "TLS Negotiation Errors"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 1, "color": "red" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "Request Performance",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Request Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+          "targets": [
+            {
+              "expr": "rate(vault_core_handle_request_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Request Latency (p50/p90/p99)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(vault_core_handle_request_duration_seconds_bucket{instance=~\"$instance\", cluster=~\"$cluster\"}[5m]))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.90, rate(vault_core_handle_request_duration_seconds_bucket{instance=~\"$instance\", cluster=~\"$cluster\"}[5m]))",
+              "legendFormat": "p90"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(vault_core_handle_request_duration_seconds_bucket{instance=~\"$instance\", cluster=~\"$cluster\"}[5m]))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 0.25, "color": "rgba(255, 152, 48, 0.1)" }, { "value": 1, "color": "rgba(242, 73, 92, 0.1)" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "Storage (Raft)",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Raft Commit Time",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+          "targets": [
+            {
+              "expr": "vault_raft_commitTime{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }} {{ quantile }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 25, "color": "rgba(255, 152, 48, 0.1)" }, { "value": 500, "color": "rgba(242, 73, 92, 0.1)" }] }
+            }
+          }
+        },
+        {
+          "title": "Leadership Changes",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+          "targets": [
+            {
+              "expr": "changes(vault_core_active{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 1, "color": "rgba(255, 152, 48, 0.1)" }] }
+            }
+          }
+        },
+        {
+          "title": "FSM Apply Latency",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+          "targets": [
+            {
+              "expr": "vault_raft_fsm_applyBatch{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }} {{ quantile }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 100, "color": "rgba(255, 152, 48, 0.1)" }, { "value": 500, "color": "rgba(242, 73, 92, 0.1)" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "Tokens & Leases",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Token Count",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 6, "x": 0, "y": 15 },
+          "targets": [
+            {
+              "expr": "vault_token_count{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Token Creation Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 6, "x": 6, "y": 15 },
+          "targets": [
+            {
+              "expr": "rate(vault_token_creation_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Lease Count",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 15 },
+          "targets": [
+            {
+              "expr": "vault_expire_num_leases{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 200000, "color": "yellow" }, { "value": 250000, "color": "red" }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "area" }
+        },
+        {
+          "title": "Lease Revocation Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 15 },
+          "targets": [
+            {
+              "expr": "rate(vault_expire_revoke_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "Barrier & Audit",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Barrier Ops Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+          "targets": [
+            {
+              "expr": "rate(vault_barrier_get_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "get {{ instance }}"
+            },
+            {
+              "expr": "rate(vault_barrier_put_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "put {{ instance }}"
+            },
+            {
+              "expr": "rate(vault_barrier_delete_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "delete {{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Audit Log Duration",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+          "targets": [
+            {
+              "expr": "vault_audit_log_request_duration_seconds{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }} {{ quantile }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 0.5, "color": "rgba(255, 152, 48, 0.1)" }, { "value": 2, "color": "rgba(242, 73, 92, 0.1)" }] }
+            }
+          }
+        },
+        {
+          "title": "Audit Failures",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+          "targets": [
+            {
+              "expr": "vault_audit_log_request_failure{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "red" }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none" }
+        }
+      ]
+    },
+    {
+      "title": "Runtime",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Memory Usage",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
+          "targets": [
+            {
+              "expr": "vault_runtime_alloc_bytes{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "alloc {{ instance }}"
+            },
+            {
+              "expr": "vault_runtime_sys_bytes{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "sys {{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 1610612736, "color": "yellow" }, { "value": 3221225472, "color": "red" }] }
+            }
+          }
+        },
+        {
+          "title": "GC Pause Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
+          "targets": [
+            {
+              "expr": "rate(vault_runtime_total_gc_pause_ns{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ns",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "Goroutines",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
+          "targets": [
+            {
+              "expr": "vault_runtime_num_goroutines{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "{{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 10000, "color": "yellow" }, { "value": 50000, "color": "red" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "Auto-Unseal (KMS)",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "KMS Encrypt/Decrypt Rate",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+          "targets": [
+            {
+              "expr": "rate(vault_seal_envelope_encrypt_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "encrypt {{ instance }}"
+            },
+            {
+              "expr": "rate(vault_seal_envelope_decrypt_count{instance=~\"$instance\", cluster=~\"$cluster\"}[5m])",
+              "legendFormat": "decrypt {{ instance }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "title": "KMS Operation Latency",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+          "targets": [
+            {
+              "expr": "vault_seal_envelope_encrypt_duration_seconds{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "encrypt {{ instance }} {{ quantile }}"
+            },
+            {
+              "expr": "vault_seal_envelope_decrypt_duration_seconds{instance=~\"$instance\", cluster=~\"$cluster\"}",
+              "legendFormat": "decrypt {{ instance }} {{ quantile }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "fillOpacity": 10,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": { "steps": [{ "value": null, "color": "transparent" }, { "value": 0.5, "color": "yellow" }, { "value": 2, "color": "red" }] }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 3
+}

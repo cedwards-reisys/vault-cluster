@@ -1,0 +1,30 @@
+services:
+  vault-ops:
+    build:
+      context: .
+      args:
+        TOFU_VERSION: "1.6.2"
+        VAULT_VERSION: "1.18.3"
+    image: vault-cluster-ops:latest
+    container_name: vault-ops
+    stdin_open: true
+    tty: true
+    environment:
+      # AWS credentials (use env vars, IAM role, or mount ~/.aws)
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_PROFILE=${AWS_PROFILE:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # Vault
+      - VAULT_ADDR=${VAULT_ADDR:-}
+      - VAULT_TOKEN=${VAULT_TOKEN:-}
+      - VAULT_SKIP_VERIFY=${VAULT_SKIP_VERIFY:-false}
+    volumes:
+      # Mount AWS credentials if using profiles
+      - ${HOME}/.aws:/home/operator/.aws:ro
+      # Mount terraform.tfvars if it exists
+      - ./terraform/terraform.tfvars:/workspace/terraform/terraform.tfvars:ro
+      # Persist Terraform state and cache
+      - ./:/workspace/host:rw
+    working_dir: /workspace

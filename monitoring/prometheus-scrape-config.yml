@@ -1,0 +1,44 @@
+# Prometheus scrape config for Vault cluster
+#
+# Uses EC2 service discovery to automatically find Vault nodes by the
+# vault-cluster tag. When a node is replaced, Prometheus picks up the
+# new instance automatically.
+#
+# Prerequisites:
+#   - Prometheus needs IAM permission: ec2:DescribeInstances
+#   - Replace <aws-region> and <cluster-name> with your environment values
+#     (see SSM param /<cluster>/config/vault-config or terraform/environments/*.tfvars)
+#
+# For Prometheus Operator users: adapt this into a ScrapeConfig CRD.
+
+scrape_configs:
+  - job_name: 'vault'
+    metrics_path: '/v1/sys/metrics'
+    params:
+      format: ['prometheus']
+    scheme: 'https'
+    tls_config:
+      insecure_skip_verify: true  # Self-signed node certs
+    scrape_interval: 30s
+    ec2_sd_configs:
+      - region: '<aws-region>'        # e.g. us-east-1
+        port: 8200
+        filters:
+          - name: 'tag:vault-cluster'
+            values: ['<cluster-name>'] # e.g. vault-nonprod-test
+          - name: 'instance-state-name'
+            values: ['running']
+    relabel_configs:
+      # Use private IP as scrape target
+      - source_labels: [__meta_ec2_private_ip]
+        target_label: __address__
+        replacement: '${1}:8200'
+      # AZ label
+      - source_labels: [__meta_ec2_tag_vault_az]
+        target_label: vault_az
+      # Cluster label
+      - source_labels: [__meta_ec2_tag_vault_cluster]
+        target_label: cluster
+      # Instance ID label
+      - source_labels: [__meta_ec2_instance_id]
+        target_label: instance
