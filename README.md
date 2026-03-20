@@ -121,7 +121,7 @@ Create a CNAME record or Route53 alias.
 VAULT_ENV=nonprod-test ./scripts/launch-node.sh 0
 
 # Wait for it to be healthy, then initialize Vault
-export VAULT_ADDR="https://vault.nonprod-test.reisys.io"
+export VAULT_ADDR="https://vault.nonprod-test.example.io"
 vault operator init -recovery-shares=5 -recovery-threshold=3
 
 # Store credentials in Secrets Manager
@@ -287,7 +287,7 @@ See [docs/rolling-updates.md](docs/rolling-updates.md) for the full runbook.
 
 ```bash
 # Update vault_version in terraform/environments/nonprod-test.tfvars, then:
-VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.reisys.io VAULT_TOKEN=<token> \
+VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
   ./scripts/rolling-update.sh
 ```
 

@@ -530,7 +530,7 @@ on nonprod and prod.
 Before restoring, verify the existing cluster doesn't use any removed plugins:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.reisys.io"
+export VAULT_ADDR="https://vault.nonprod.example.io"
 export VAULT_TOKEN="<root-token>"
 
 # Check secrets engine mount types — look for 'database' (good) vs 'mysql'/'postgresql' (bad)

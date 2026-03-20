@@ -20,7 +20,7 @@ variable "private_subnet_ids" {
 
 variable "acm_certificate_arn" {
   type        = string
-  description = "ACM certificate ARN for vault.nonprod.reisys.io"
+  description = "ACM certificate ARN for vault.nonprod.example.io"
 }
 
 variable "instance_type" {
@@ -49,7 +49,7 @@ variable "cluster_name" {
 
 variable "vault_domain" {
   type        = string
-  default     = "vault.nonprod.reisys.io"
+  default     = "vault.nonprod.example.io"
   description = "Domain name for Vault API/UI access"
 }
 

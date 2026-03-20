@@ -29,8 +29,8 @@ node {
                     // Both envs are in nonprod account — instance profile covers both
                     withAwsAuth('nonprod', img) {
                         sh """
-                            export VAULT_NONPROD_ADDR='https://vault.nonprod.reisys.io'
-                            export VAULT_TEST_ADDR='https://vault.nonprod-test.reisys.io'
+                            export VAULT_NONPROD_ADDR='https://vault.nonprod.example.io'
+                            export VAULT_TEST_ADDR='https://vault.nonprod-test.example.io'
 
                             export VAULT_NONPROD_TOKEN=\$(aws secretsmanager get-secret-value \
                                 --region us-east-1 \

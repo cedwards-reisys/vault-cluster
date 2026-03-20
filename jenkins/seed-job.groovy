@@ -28,15 +28,15 @@
 //   - prod: assumes 'jenkins' role in prod account via STS
 def environments = [
     'nonprod-test': [
-        vaultAddr: 'https://vault.nonprod-test.reisys.io',
+        vaultAddr: 'https://vault.nonprod-test.example.io',
         clusterName: 'vault-nonprod-test',
     ],
     'nonprod': [
-        vaultAddr: 'https://vault.nonprod.reisys.io',
+        vaultAddr: 'https://vault.nonprod.example.io',
         clusterName: 'vault-nonprod',
     ],
     'prod': [
-        vaultAddr: 'https://vault.prod.reisys.io',
+        vaultAddr: 'https://vault.prod.example.io',
         clusterName: 'vault-prod',
     ],
 ]

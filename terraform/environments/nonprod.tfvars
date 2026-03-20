@@ -18,7 +18,7 @@ acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-x
 
 # Vault Configuration
 cluster_name  = "vault-nonprod"
-vault_domain  = "vault.nonprod.reisys.io"
+vault_domain  = "vault.nonprod.example.io"
 vault_version = "1.21.4"
 environment   = "nonprod"
 

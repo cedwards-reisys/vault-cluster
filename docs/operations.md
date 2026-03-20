@@ -22,9 +22,9 @@ Complete guide to operating the Vault cluster across all environments: multi-env
 
 | Environment | AWS Account | Cluster Name | Domain |
 |-------------|-------------|--------------|--------|
-| nonprod-test | shared-nonprod | vault-nonprod-test | vault.nonprod-test.reisys.io |
-| nonprod | shared-nonprod | vault-nonprod | vault.nonprod.reisys.io |
-| prod | prod | vault-prod | vault.prod.reisys.io |
+| nonprod-test | shared-nonprod | vault-nonprod-test | vault.nonprod-test.example.io |
+| nonprod | shared-nonprod | vault-nonprod | vault.nonprod.example.io |
+| prod | prod | vault-prod | vault.prod.example.io |
 
 ### Directory Structure
 
@@ -85,11 +85,11 @@ VAULT_ENV=nonprod-test ./scripts/launch-node.sh 0
 VAULT_ENV=nonprod ./scripts/terminate-node.sh i-0abc123
 
 # Rolling update in prod
-VAULT_ENV=prod VAULT_ADDR=https://vault.prod.reisys.io VAULT_TOKEN=<token> \
+VAULT_ENV=prod VAULT_ADDR=https://vault.prod.example.io VAULT_TOKEN=<token> \
   ./scripts/rolling-update.sh
 
 # cluster-status.sh doesn't need VAULT_ENV (no tofu dependency)
-VAULT_ADDR=https://vault.nonprod.reisys.io VAULT_TOKEN=<token> \
+VAULT_ADDR=https://vault.nonprod.example.io VAULT_TOKEN=<token> \
   ./scripts/cluster-status.sh
 ```
 
@@ -149,7 +149,7 @@ Backup automation requires a **one-time Vault configuration** to set up IAM auth
 ./scripts/env.sh nonprod-test apply
 
 # 3. Roll nodes to pick up the systemd timer
-VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.reisys.io VAULT_TOKEN=<token> \
+VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
   ./scripts/rolling-update.sh
 ```
 
@@ -177,7 +177,7 @@ aws s3 ls s3://vault-nonprod-test-backups/vault-nonprod-test/daily/ --recursive
 You don't have to rely on the automated backups. Take a snapshot anytime:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.reisys.io"
+export VAULT_ADDR="https://vault.nonprod.example.io"
 export VAULT_TOKEN="<root-or-operator-token>"
 
 vault operator raft snapshot save vault-backup-$(date +%Y%m%d-%H%M%S).snap
@@ -195,7 +195,7 @@ aws s3 cp vault-backup-*.snap s3://vault-nonprod-backups/vault-nonprod/daily/
 The restore script lists available snapshots and guides you through the process:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod-test.reisys.io"
+export VAULT_ADDR="https://vault.nonprod-test.example.io"
 export VAULT_TOKEN="<root-token>"
 
 ./scripts/restore-snapshot.sh nonprod-test
@@ -213,7 +213,7 @@ This will:
 ### Direct Restore (with known S3 key)
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod-test.reisys.io"
+export VAULT_ADDR="https://vault.nonprod-test.example.io"
 export VAULT_TOKEN="<root-token>"
 
 ./scripts/restore-snapshot.sh nonprod-test \
@@ -236,9 +236,9 @@ Copy all Vault data from nonprod to nonprod-test for testing and development.
 ### Usage
 
 ```bash
-export VAULT_NONPROD_ADDR="https://vault.nonprod.reisys.io"
+export VAULT_NONPROD_ADDR="https://vault.nonprod.example.io"
 export VAULT_NONPROD_TOKEN="<nonprod-root-token>"
-export VAULT_TEST_ADDR="https://vault.nonprod-test.reisys.io"
+export VAULT_TEST_ADDR="https://vault.nonprod-test.example.io"
 export VAULT_TEST_TOKEN="<nonprod-test-root-token>"
 
 ./scripts/sync-to-nonprod-test.sh
@@ -335,7 +335,7 @@ For clusters where recovery keys have been lost but a root token is still availa
 ### Usage
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.reisys.io"
+export VAULT_ADDR="https://vault.nonprod.example.io"
 export VAULT_TOKEN="<root-token>"
 
 ./scripts/rekey-recovery.sh
@@ -385,7 +385,7 @@ Fresh deploy + snapshot restore. The old cluster stays running until the new one
 #### 1. Take Snapshot of Existing Cluster
 
 ```bash
-export VAULT_ADDR="https://old-vault.nonprod.reisys.io"
+export VAULT_ADDR="https://old-vault.nonprod.example.io"
 export VAULT_TOKEN="<existing-root-token>"
 
 # Create snapshot
@@ -467,7 +467,7 @@ Create Route 53 alias record or CNAME pointing to the NLB.
 
 ```bash
 unset VAULT_SKIP_VERIFY
-export VAULT_ADDR="https://vault.nonprod.reisys.io"
+export VAULT_ADDR="https://vault.nonprod.example.io"
 
 vault status
 ./scripts/cluster-status.sh
@@ -528,7 +528,7 @@ The automated backup system uses Vault's AWS IAM auth method so each node can au
 Run these commands against the Vault cluster after it's initialized:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod-test.reisys.io"
+export VAULT_ADDR="https://vault.nonprod-test.example.io"
 export VAULT_TOKEN="<root-token>"
 
 # 1. Enable AWS auth method

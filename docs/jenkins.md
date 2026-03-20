@@ -121,7 +121,7 @@ def terraformDir = 'terraform'  // terraform directory in repo
 def environments = [
     'nonprod-test': [
         awsCredential: 'aws-nonprod',           // matches your Jenkins credential ID
-        vaultAddr: 'https://vault.nonprod-test.reisys.io',  // your domain
+        vaultAddr: 'https://vault.nonprod-test.example.io',  // your domain
         vaultTokenCredential: 'vault-nonprod-test-token',    // matches your credential ID
     ],
     // ...
