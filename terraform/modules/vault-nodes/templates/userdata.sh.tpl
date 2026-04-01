@@ -233,7 +233,7 @@ seal "awskms" {
 }
 
 # API address (node's own private IP for direct node-to-node forwarding)
-api_addr      = "https://$${PRIVATE_IP}:8200"
+api_addr      = "https://$${VAULT_DOMAIN}"
 cluster_addr  = "https://$${PRIVATE_IP}:8201"
 
 # Telemetry — exposes /v1/sys/metrics?format=prometheus

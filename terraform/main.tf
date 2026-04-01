@@ -127,7 +127,8 @@ resource "aws_ssm_parameter" "vault_config" {
     kms_key_id              = module.kms.key_id
     instance_type           = var.instance_type
     private_subnet_ids      = var.private_subnet_ids
-    instance_tags           = var.instance_tags
+    instance_tags                 = var.instance_tags
+    additional_security_group_ids = var.additional_security_group_ids
   })
   tags = local.common_tags
 }

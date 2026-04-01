@@ -4,7 +4,7 @@ services:
       context: .
       args:
         TOFU_VERSION: "1.6.2"
-        VAULT_VERSION: "1.18.3"
+        VAULT_VERSION: "1.21.4"
     image: vault-cluster-ops:latest
     container_name: vault-ops
     stdin_open: true

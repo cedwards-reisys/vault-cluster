@@ -105,6 +105,14 @@ get_config() {
         --query 'SecurityGroups[].GroupId' \
         --output text))
 
+    # Merge additional security group IDs from config (if any)
+    ADDITIONAL_SGS=$(cfg_get additional_security_group_ids | jq -r '.[]' 2>/dev/null)
+    if [ -n "$ADDITIONAL_SGS" ]; then
+        while read -r sg; do
+            SECURITY_GROUP_IDS+=("$sg")
+        done <<< "$ADDITIONAL_SGS"
+    fi
+
     # IAM instance profile follows naming convention
     IAM_INSTANCE_PROFILE="${CLUSTER_NAME}-vault-profile"
 

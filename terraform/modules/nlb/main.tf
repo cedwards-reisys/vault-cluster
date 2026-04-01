@@ -18,11 +18,11 @@ resource "aws_lb" "vault" {
   })
 }
 
-# Target group for Vault nodes (TLS passthrough to HTTPS backends)
+# Target group for Vault nodes (TLS re-encryption to HTTPS backends)
 resource "aws_lb_target_group" "vault" {
   name     = "${var.cluster_name}-vault-tg"
   port     = 8200
-  protocol = "TCP"
+  protocol = "TLS"
   vpc_id   = var.vpc_id
 
   # Health check configuration
