@@ -81,6 +81,12 @@ variable "ssm_logs_log_group" {
   description = "CloudWatch log group for SSM Session Manager logs"
 }
 
+variable "enable_deletion_protection" {
+  type        = bool
+  default     = true
+  description = "Enable NLB deletion protection (recommended for prod)"
+}
+
 variable "backup_enabled" {
   type        = bool
   default     = false

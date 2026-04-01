@@ -18,6 +18,12 @@ variable "acm_certificate_arn" {
   description = "ACM certificate ARN for TLS listener"
 }
 
+variable "enable_deletion_protection" {
+  type        = bool
+  default     = true
+  description = "Enable NLB deletion protection (recommended for prod)"
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

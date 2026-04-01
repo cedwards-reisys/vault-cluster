@@ -63,8 +63,9 @@ module "nlb" {
   vpc_id              = var.vpc_id
   cluster_name        = var.cluster_name
   private_subnet_ids  = var.private_subnet_ids
-  acm_certificate_arn = var.acm_certificate_arn
-  tags                = local.common_tags
+  acm_certificate_arn        = var.acm_certificate_arn
+  enable_deletion_protection = var.enable_deletion_protection
+  tags                       = local.common_tags
 }
 
 # Vault nodes - Persistent EBS volumes only

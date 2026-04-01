@@ -32,6 +32,9 @@ allowed_cidr_blocks = ["0.0.0.0/0"]
 ssm_logs_s3_bucket = "ssm-session-logs-nonprod"
 ssm_logs_log_group = "/aws/ssm/session-logs"
 
+# NLB
+enable_deletion_protection = false
+
 # Backup Configuration
 backup_enabled   = true
 backup_s3_bucket = "vault-nonprod-test-backups"

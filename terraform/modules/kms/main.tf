@@ -1,7 +1,7 @@
 # KMS key for Vault auto-unseal
 resource "aws_kms_key" "vault_unseal" {
   description             = "KMS key for Vault auto-unseal - ${var.cluster_name}"
-  deletion_window_in_days = 7
+  deletion_window_in_days = 30
   enable_key_rotation     = true
 
   tags = merge(var.tags, {

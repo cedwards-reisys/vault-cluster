@@ -8,7 +8,7 @@ resource "aws_lb" "vault" {
   # NLB does not use security groups - traffic goes directly to targets
   # Source IP is preserved, so Vault SG must allow inbound from allowed CIDRs
 
-  enable_deletion_protection = false
+  enable_deletion_protection = var.enable_deletion_protection
 
   # Enable cross-zone load balancing for even distribution
   enable_cross_zone_load_balancing = true
