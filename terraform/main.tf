@@ -24,22 +24,26 @@ module "kms" {
   tags         = local.common_tags
 }
 
+# Secrets Manager — CA certs (read-only) + Vault credential placeholders
+module "secrets" {
+  source = "./modules/secrets"
+
+  cluster_name = var.cluster_name
+  tags         = local.common_tags
+}
+
 # IAM roles and policies for Vault nodes
 module "iam" {
   source = "./modules/iam"
 
   cluster_name      = var.cluster_name
   kms_key_arn       = module.kms.key_arn
-  secrets_manager_arns = concat(
-    [
-      module.kms.ca_cert_secret_arn,
-      module.kms.ca_key_secret_arn,
-    ],
-    [
-      module.kms.root_token_secret_arn,
-      module.kms.recovery_keys_secret_arn,
-    ]
-  )
+  secrets_manager_arns = [
+    module.secrets.ca_cert_secret_arn,
+    module.secrets.ca_key_secret_arn,
+    module.secrets.root_token_secret_arn,
+    module.secrets.recovery_keys_secret_arn,
+  ]
   ssm_logs_s3_bucket = var.ssm_logs_s3_bucket
   ssm_logs_log_group = var.ssm_logs_log_group
   tags               = local.common_tags
@@ -82,8 +86,8 @@ module "vault_nodes" {
   security_group_id    = module.security_groups.vault_security_group_id
   iam_instance_profile = module.iam.instance_profile_name
   kms_key_id           = module.kms.key_id
-  ca_cert_secret_arn   = module.kms.ca_cert_secret_arn
-  ca_key_secret_arn    = module.kms.ca_key_secret_arn
+  ca_cert_secret_arn   = module.secrets.ca_cert_secret_arn
+  ca_key_secret_arn    = module.secrets.ca_key_secret_arn
   aws_region           = var.aws_region
   backup_enabled       = var.backup_enabled
   backup_s3_bucket     = var.backup_s3_bucket

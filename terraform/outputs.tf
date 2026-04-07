@@ -40,7 +40,7 @@ output "iam_instance_profile_name" {
 
 output "ca_cert_secret_arn" {
   description = "Secrets Manager ARN for CA certificate"
-  value       = module.kms.ca_cert_secret_arn
+  value       = module.secrets.ca_cert_secret_arn
 }
 
 output "target_group_arn" {
@@ -100,12 +100,12 @@ output "backup_s3_bucket" {
 
 output "root_token_secret_arn" {
   description = "Secrets Manager ARN for Vault root token"
-  value       = module.kms.root_token_secret_arn
+  value       = module.secrets.root_token_secret_arn
 }
 
 output "recovery_keys_secret_arn" {
   description = "Secrets Manager ARN for Vault recovery keys"
-  value       = module.kms.recovery_keys_secret_arn
+  value       = module.secrets.recovery_keys_secret_arn
 }
 
 output "instance_tags" {
