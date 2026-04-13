@@ -216,9 +216,11 @@ update_node() {
         exit 1
     fi
 
-    # Wait a bit for the instance to fully terminate and volume to detach
+    # Wait for old instance to fully terminate so auto_join won't discover it
     log_info "Waiting for instance termination..."
-    sleep 15
+    aws ec2 wait instance-terminated \
+        --region "$AWS_REGION" \
+        --instance-ids "$instance_id" 2>/dev/null || true
 
     # Launch new node (will use same node_id and rejoin Raft automatically)
     log_info "Launching new node..."
@@ -355,10 +357,10 @@ main() {
         local az_index
         az_index=$(get_az_index "$az")
 
-        # Check if this is the leader
+        # Check if this is the leader (match by AZ suffix since node_id = cluster-az)
         local is_leader
-        is_leader=$(vault operator raft list-peers -format=json | jq -r --arg iid "$instance_id" \
-            '.data.config.servers[] | select(.node_id | contains($iid)) | .leader // false')
+        is_leader=$(vault operator raft list-peers -format=json | jq -r --arg az "$az" \
+            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader // false')
 
         if [ "$is_leader" == "true" ]; then
             leader_instance="$instance_id"

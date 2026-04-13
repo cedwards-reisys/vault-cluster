@@ -187,6 +187,18 @@ remove_from_raft() {
     fi
 }
 
+# Remove vault-cluster tag so auto_join never discovers this instance
+remove_cluster_tag() {
+    log_info "Removing vault-cluster tag (prevent auto_join discovery)..."
+
+    aws ec2 delete-tags \
+        --region "$AWS_REGION" \
+        --resources "$INSTANCE_ID" \
+        --tags "Key=vault-cluster" 2>/dev/null || true
+
+    log_info "Cluster tag removed"
+}
+
 # Deregister from target group
 deregister_from_target_group() {
     log_info "Deregistering from target group..."
@@ -299,6 +311,7 @@ main() {
     echo ""
     remove_from_raft
     deregister_from_target_group
+    remove_cluster_tag
     detach_ebs_volume
     terminate_instance
 
