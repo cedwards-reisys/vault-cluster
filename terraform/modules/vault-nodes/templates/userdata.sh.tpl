@@ -202,6 +202,7 @@ cat > /opt/vault/config/vault.hcl <<EOF
 ui = true
 disable_mlock = true
 cluster_name = "$${CLUSTER_NAME}"
+log_level = "warn"
 
 # API/UI listener - HTTPS with self-signed cert
 listener "tcp" {
