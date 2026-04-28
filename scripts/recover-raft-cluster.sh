@@ -85,14 +85,20 @@ ssm_run() {
     shift
     local command="$*"
 
+    local params_file
+    params_file=$(mktemp)
+    jq -n --arg cmd "$command" '{"commands":[$cmd]}' > "$params_file"
+
     local cmd_id
     cmd_id=$(aws ssm send-command \
         --region "$AWS_REGION" \
         --instance-ids "$instance_id" \
         --document-name "AWS-RunShellScript" \
-        --parameters "commands=[\"$command\"]" \
+        --parameters "file://$params_file" \
         --query 'Command.CommandId' \
         --output text)
+
+    rm -f "$params_file"
 
     # Wait for completion
     aws ssm wait command-executed \

@@ -284,14 +284,20 @@ wait_for_healthy() {
     log_info "Waiting for Vault to be unsealed on $INSTANCE_ID (timeout: ${max_wait}s)..."
 
     while [ $elapsed -lt $max_wait ]; do
+        local params_file
+        params_file=$(mktemp)
+        jq -n '{"commands":["curl -sk https://127.0.0.1:8200/v1/sys/health?standbyok=true -o /dev/null -w %{http_code} 2>/dev/null || echo 000"]}' > "$params_file"
+
         local cmd_id
         cmd_id=$(aws ssm send-command \
             --region "$AWS_REGION" \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["curl -sk https://127.0.0.1:8200/v1/sys/health?standbyok=true -o /dev/null -w %{http_code} 2>/dev/null || echo 000"]' \
+            --parameters "file://$params_file" \
             --query 'Command.CommandId' \
             --output text 2>/dev/null) || true
+
+        rm -f "$params_file"
 
         if [ -n "$cmd_id" ]; then
             aws ssm wait command-executed \
