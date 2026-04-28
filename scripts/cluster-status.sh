@@ -96,7 +96,7 @@ if [ -n "${VAULT_TOKEN:-}" ]; then
     echo "3. Seal Status"
     echo "--------------"
     seal_status=$(vault status -format=json 2>/dev/null || echo '{"sealed": "unknown"}')
-    seal_type=$(echo "$seal_status" | jq -r '.seal_type // "unknown"')
+    seal_type=$(echo "$seal_status" | jq -r '.type // "unknown"')
     echo "Seal Type: $seal_type"
 
     if [ "$seal_type" == "awskms" ]; then

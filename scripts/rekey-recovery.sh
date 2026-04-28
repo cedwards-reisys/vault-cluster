@@ -64,7 +64,7 @@ if [ "$SEALED" != "false" ]; then
 fi
 
 SEAL_STATUS=$(curl "${CURL_OPTS[@]}" -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/sys/seal-status")
-SEAL_TYPE=$(echo "$SEAL_STATUS" | jq -r '.seal_type // "unknown"')
+SEAL_TYPE=$(echo "$SEAL_STATUS" | jq -r '.type // "unknown"')
 
 if [ "$SEAL_TYPE" != "awskms" ]; then
     log_error "Expected seal type 'awskms', got '$SEAL_TYPE'"
