@@ -304,8 +304,9 @@ wait_for_peers_rejoin() {
         local peer_count
         peer_count=$(ssm_run "$RECOVERY_NODE" \
             "VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/opt/vault/tls/ca.crt vault operator raft list-peers -format=json 2>/dev/null | jq '.data.config.servers | length'" \
-            || echo "0")
-        peer_count=$(echo "$peer_count" | tr -d '[:space:]')
+            || true)
+        peer_count=$(echo "$peer_count" | grep -oE '^[0-9]+$' | head -1)
+        peer_count="${peer_count:-0}"
 
         if [ "$peer_count" -ge "$expected_peers" ]; then
             log_info "All $peer_count peers have rejoined"
