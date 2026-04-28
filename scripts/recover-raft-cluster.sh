@@ -292,7 +292,7 @@ wait_for_peers_rejoin() {
         [ "$iid" == "$RECOVERY_NODE" ] && continue
 
         log_info "Wiping stale Raft data and restarting Vault on $iid..."
-        ssm_run "$iid" "systemctl stop vault && rm -rf /opt/vault/data/raft/* && systemctl start vault" >/dev/null
+        ssm_run "$iid" "systemctl stop vault && rm -rf /opt/vault/data/* && systemctl start vault" >/dev/null
     done
 
     local max_wait=300
