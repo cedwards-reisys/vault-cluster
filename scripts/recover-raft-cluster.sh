@@ -283,14 +283,16 @@ wait_for_peers_rejoin() {
 
     log_step "Waiting for $((expected_peers - 1)) peer(s) to rejoin..."
 
-    # Restart Vault on the non-recovery nodes so they re-trigger auto_join
+    # Wipe stale Raft data on non-recovery nodes so they rejoin as fresh peers.
+    # Existing Raft state contains old peer IPs that prevent re-election.
+    # Data is not lost — the recovery node is source of truth and will replicate.
     for i in $(seq 0 $((INSTANCE_COUNT - 1))); do
         local iid
         iid=$(echo "$INSTANCES_JSON" | jq -r ".[$i].InstanceId")
         [ "$iid" == "$RECOVERY_NODE" ] && continue
 
-        log_info "Restarting Vault on $iid to trigger auto_join..."
-        ssm_run "$iid" "systemctl restart vault" >/dev/null
+        log_info "Wiping stale Raft data and restarting Vault on $iid..."
+        ssm_run "$iid" "systemctl stop vault && rm -rf /opt/vault/data/raft/* && systemctl start vault" >/dev/null
     done
 
     local max_wait=300
