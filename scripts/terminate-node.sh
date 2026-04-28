@@ -309,6 +309,42 @@ main() {
     fi
 
     echo ""
+
+    # If this node is the leader, step down before terminating
+    if [ -n "${VAULT_TOKEN:-}" ]; then
+        local raft_peers
+        raft_peers=$(vault operator raft list-peers -format=json 2>/dev/null || echo '{}')
+        local is_leader
+        is_leader=$(echo "$raft_peers" | jq -r --arg az "$INSTANCE_AZ" \
+            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader // false' 2>/dev/null || echo "false")
+
+        if [ "$is_leader" == "true" ]; then
+            log_warn "This node is the current LEADER"
+            log_info "Requesting leader step-down before termination..."
+            vault operator step-down || true
+
+            local max_wait=60
+            local wait_interval=5
+            local elapsed=0
+            while [ $elapsed -lt $max_wait ]; do
+                sleep $wait_interval
+                elapsed=$((elapsed + wait_interval))
+                local new_leader
+                new_leader=$(vault operator raft list-peers -format=json 2>/dev/null \
+                    | jq -r '.data.config.servers[] | select(.leader == true) | .node_id' || true)
+                if [ -n "$new_leader" ]; then
+                    log_info "New leader elected: $new_leader"
+                    break
+                fi
+                log_info "Waiting for new leader election (${elapsed}s/${max_wait}s)..."
+            done
+
+            if [ $elapsed -ge $max_wait ]; then
+                log_warn "Timed out waiting for new leader - proceeding with termination"
+            fi
+        fi
+    fi
+
     remove_from_raft
     deregister_from_target_group
     remove_cluster_tag

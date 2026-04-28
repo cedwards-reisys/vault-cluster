@@ -194,6 +194,36 @@ wait_for_cluster_stable() {
     return 1
 }
 
+# Step down the leader and wait for a new leader to be elected
+step_down_leader() {
+    log_info "Requesting leader step-down..."
+    vault operator step-down
+
+    local max_wait=60
+    local wait_interval=5
+    local elapsed=0
+
+    log_info "Waiting for new leader election..."
+    while [ $elapsed -lt $max_wait ]; do
+        sleep $wait_interval
+        elapsed=$((elapsed + wait_interval))
+
+        local new_leader
+        new_leader=$(vault operator raft list-peers -format=json 2>/dev/null \
+            | jq -r '.data.config.servers[] | select(.leader == true) | .node_id' || true)
+
+        if [ -n "$new_leader" ]; then
+            log_info "New leader elected: $new_leader"
+            return 0
+        fi
+
+        log_info "No leader yet (${elapsed}s/${max_wait}s)..."
+    done
+
+    log_error "Timed out waiting for new leader election"
+    return 1
+}
+
 # Update one node
 update_node() {
     local instance_id="$1"
@@ -377,11 +407,15 @@ main() {
 
     done <<< "$instances"
 
-    # Update leader last
+    # Update leader last — step down first so a follower takes over
     if [ -n "$leader_instance" ]; then
         node_count=$((node_count + 1))
         echo ""
-        log_step "Node $node_count/$total_nodes (LEADER)"
+        log_step "Node $node_count/$total_nodes (LEADER - stepping down first)"
+        if ! step_down_leader; then
+            log_error "Leader step-down failed - aborting to avoid quorum loss"
+            exit 1
+        fi
         update_node "$leader_instance" "$leader_az" "$leader_az_index"
     fi
 
