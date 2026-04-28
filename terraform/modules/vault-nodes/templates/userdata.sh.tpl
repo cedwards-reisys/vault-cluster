@@ -290,9 +290,9 @@ log() { logger -t vault-backup "$1"; echo "$1"; }
 
 # Check if this node is the active leader
 HEALTH=$(curl -sk "$VAULT_ADDR/v1/sys/health" 2>/dev/null || echo '{}')
-INITIALIZED=$(echo "$HEALTH" | jq -r '.initialized // false')
-SEALED=$(echo "$HEALTH" | jq -r '.sealed // true')
-STANDBY=$(echo "$HEALTH" | jq -r '.standby // true')
+INITIALIZED=$(echo "$HEALTH" | jq -r '.initialized')
+SEALED=$(echo "$HEALTH" | jq -r '.sealed')
+STANDBY=$(echo "$HEALTH" | jq -r '.standby')
 
 if [ "$INITIALIZED" != "true" ] || [ "$SEALED" != "false" ]; then
     log "Node is not initialized or is sealed. Skipping backup."

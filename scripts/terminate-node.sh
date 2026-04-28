@@ -316,7 +316,7 @@ main() {
         raft_peers=$(vault operator raft list-peers -format=json 2>/dev/null || echo '{}')
         local is_leader
         is_leader=$(echo "$raft_peers" | jq -r --arg az "$INSTANCE_AZ" \
-            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader // false' 2>/dev/null || echo "false")
+            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader' 2>/dev/null || echo "false")
 
         if [ "$is_leader" == "true" ]; then
             log_warn "This node is the current LEADER"

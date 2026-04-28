@@ -57,7 +57,7 @@ echo ""
 log_info "Verifying Vault status..."
 HEALTH=$(curl "${CURL_OPTS[@]}" "$VAULT_ADDR/v1/sys/health" || echo '{}')
 
-SEALED=$(echo "$HEALTH" | jq -r '.sealed // true')
+SEALED=$(echo "$HEALTH" | jq -r '.sealed')
 if [ "$SEALED" != "false" ]; then
     log_error "Vault is sealed or unreachable"
     exit 1
@@ -149,7 +149,7 @@ if [ "$REQUIRED" -gt 0 ] && [ "$PROGRESS" -eq 0 ]; then
             -d "{\"key\": \"$key\", \"nonce\": \"$NONCE\"}" \
             "$VAULT_ADDR/v1/sys/rekey-recovery-key/update")
 
-        COMPLETE=$(echo "$RESPONSE" | jq -r '.complete // false')
+        COMPLETE=$(echo "$RESPONSE" | jq -r '.complete')
         KEYS_SUBMITTED=$((KEYS_SUBMITTED + 1))
 
         if [ "$COMPLETE" = "true" ]; then

@@ -170,7 +170,7 @@ wait_for_cluster_stable() {
         local health
         health=$(curl -sk "$VAULT_ADDR/v1/sys/health" 2>/dev/null || echo '{"sealed": true}')
         local sealed
-        sealed=$(echo "$health" | jq -r '.sealed // true')
+        sealed=$(echo "$health" | jq -r '.sealed')
 
         if [ "$sealed" == "false" ]; then
             local peer_count
@@ -390,7 +390,7 @@ main() {
         # Check if this is the leader (match by AZ suffix since node_id = cluster-az)
         local is_leader
         is_leader=$(vault operator raft list-peers -format=json | jq -r --arg az "$az" \
-            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader // false')
+            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader')
 
         if [ "$is_leader" == "true" ]; then
             leader_instance="$instance_id"

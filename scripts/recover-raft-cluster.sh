@@ -160,9 +160,9 @@ check_no_leader() {
         health=$(ssm_run "$iid" "curl -sk https://127.0.0.1:8200/v1/sys/health -o /dev/stdout -w '' 2>/dev/null || echo '{}'") || health='{}'
 
         local sealed standby initialized
-        initialized=$(echo "$health" | jq -r '.initialized // "unknown"')
-        sealed=$(echo "$health" | jq -r '.sealed // "unknown"')
-        standby=$(echo "$health" | jq -r '.standby // "unknown"')
+        initialized=$(echo "$health" | jq -r '.initialized')
+        sealed=$(echo "$health" | jq -r '.sealed')
+        standby=$(echo "$health" | jq -r '.standby')
 
         local status_label=""
         if [ "$sealed" == "true" ]; then
@@ -250,8 +250,8 @@ wait_for_recovery_leader() {
         health=$(ssm_run "$RECOVERY_NODE" "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null || echo '{}'") || health='{}'
 
         local sealed standby
-        sealed=$(echo "$health" | jq -r '.sealed // true')
-        standby=$(echo "$health" | jq -r '.standby // true')
+        sealed=$(echo "$health" | jq -r '.sealed')
+        standby=$(echo "$health" | jq -r '.standby')
 
         if [ "$sealed" == "false" ] && [ "$standby" == "false" ]; then
             log_info "Recovery node is now the active leader"
