@@ -206,10 +206,11 @@ log_level = "warn"
 
 # API/UI listener - HTTPS with self-signed cert
 listener "tcp" {
-  address         = "0.0.0.0:8200"
-  tls_cert_file   = "/opt/vault/tls/node.crt"
-  tls_key_file    = "/opt/vault/tls/node.key"
-  tls_client_ca_file = "/opt/vault/tls/ca.crt"
+  address                            = "0.0.0.0:8200"
+  tls_cert_file                      = "/opt/vault/tls/node.crt"
+  tls_key_file                       = "/opt/vault/tls/node.key"
+  tls_client_ca_file                 = "/opt/vault/tls/ca.crt"
+  unauthenticated_metrics_access     = true
 }
 
 # Raft storage with auto-join
@@ -239,9 +240,8 @@ cluster_addr  = "https://$${PRIVATE_IP}:8201"
 
 # Telemetry — exposes /v1/sys/metrics?format=prometheus
 telemetry {
-  disable_hostname                 = true
-  prometheus_retention_time         = "6h"
-  unauthenticated_metrics_access   = true
+  disable_hostname           = true
+  prometheus_retention_time  = "6h"
 }
 EOF
 
