@@ -274,6 +274,11 @@ vault status -address=https://127.0.0.1:8200 -ca-cert=/opt/vault/tls/ca.crt || t
 # ============================================================
 echo "Setting up backup automation..."
 
+mkdir -p /opt/vault/scripts
+touch /opt/vault/scripts/backup-snapshot.sh
+chmod 755 /opt/vault/scripts/backup-snapshot.sh
+chown vault:vault /opt/vault/scripts/backup-snapshot.sh
+
 # Install backup script
 cat > /opt/vault/scripts/backup-snapshot.sh <<'BACKUP_EOF'
 #!/bin/bash
@@ -343,10 +348,6 @@ vault token revoke -self 2>/dev/null || true
 
 log "Backup completed successfully."
 BACKUP_EOF
-
-mkdir -p /opt/vault/scripts
-chmod 755 /opt/vault/scripts/backup-snapshot.sh
-chown vault:vault /opt/vault/scripts/backup-snapshot.sh
 
 # Create systemd service for backup
 cat > /etc/systemd/system/vault-backup.service <<'SVCEOF'
