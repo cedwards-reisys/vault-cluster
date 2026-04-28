@@ -273,35 +273,56 @@ register_with_target_group() {
     log_info "Registered with target group"
 }
 
-# Wait for target to be healthy
+# Wait for Vault to be running and unsealed on the new node
+# NLB health check only marks the active leader as healthy, so standby nodes
+# would never pass a target group health check. Instead, check the node directly.
 wait_for_healthy() {
     local max_wait=300
     local wait_interval=15
     local elapsed=0
 
-    log_info "Waiting for instance to be healthy in target group (timeout: ${max_wait}s)..."
+    log_info "Waiting for Vault to be unsealed on $INSTANCE_ID (timeout: ${max_wait}s)..."
 
     while [ $elapsed -lt $max_wait ]; do
-        local health
-        health=$(aws elbv2 describe-target-health \
+        local cmd_id
+        cmd_id=$(aws ssm send-command \
             --region "$AWS_REGION" \
-            --target-group-arn "$TARGET_GROUP_ARN" \
-            --targets "Id=$INSTANCE_ID" \
-            --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-            --output text 2>/dev/null || echo "unknown")
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["curl -sk https://127.0.0.1:8200/v1/sys/health?standbyok=true -o /dev/null -w %{http_code} 2>/dev/null || echo 000"]' \
+            --query 'Command.CommandId' \
+            --output text 2>/dev/null) || true
 
-        if [ "$health" == "healthy" ]; then
-            log_info "Instance is healthy!"
-            return 0
+        if [ -n "$cmd_id" ]; then
+            aws ssm wait command-executed \
+                --region "$AWS_REGION" \
+                --command-id "$cmd_id" \
+                --instance-id "$INSTANCE_ID" 2>/dev/null || true
+
+            local http_code
+            http_code=$(aws ssm get-command-invocation \
+                --region "$AWS_REGION" \
+                --command-id "$cmd_id" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardOutputContent' \
+                --output text 2>/dev/null | tr -d '[:space:]') || true
+
+            if [ "$http_code" == "200" ]; then
+                log_info "Vault is unsealed and running"
+                return 0
+            fi
+
+            log_info "Vault HTTP status: $http_code (waiting...)"
+        else
+            log_info "SSM not ready yet (waiting...)"
         fi
 
-        log_info "Health status: $health (waiting...)"
         sleep $wait_interval
         elapsed=$((elapsed + wait_interval))
     done
 
-    log_warn "Instance did not become healthy within timeout"
-    log_warn "Check instance logs: aws ec2 get-console-output --instance-id $INSTANCE_ID"
+    log_warn "Vault did not become ready within timeout"
+    log_warn "Check instance logs: aws ssm start-session --target $INSTANCE_ID"
     return 1
 }
 

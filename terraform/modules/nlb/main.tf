@@ -25,18 +25,19 @@ resource "aws_lb_target_group" "vault" {
   protocol = "TLS"
   vpc_id   = var.vpc_id
 
-  # Health check configuration
-  # Using HTTPS health check to verify Vault is actually responding
+  # Health check — only the active leader returns 200 on /v1/sys/health
+  # Standby nodes return 429, so the NLB only routes traffic to the leader
+  # Low interval + thresholds keep failover fast during leader transitions
   health_check {
     enabled             = true
     healthy_threshold   = 2
     unhealthy_threshold = 2
-    timeout             = 10
-    interval            = 30
+    timeout             = 6
+    interval            = 10
     port                = "traffic-port"
     protocol            = "HTTPS"
-    path                = "/v1/sys/health?standby=true&perfstandbyok=true"
-    matcher             = "200,429,472,473"
+    path                = "/v1/sys/health"
+    matcher             = "200"
   }
 
   # Preserve client IP (default for NLB, but explicit)
