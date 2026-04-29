@@ -166,8 +166,8 @@ check_no_leader() {
         [ -z "$health" ] && health='{}'
 
         local sealed standby
-        sealed=$(echo "$health" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
-        standby=$(echo "$health" | jq -r '.standby // "unknown"' 2>/dev/null || echo "unknown")
+        sealed=$(echo "$health" | jq -r '.sealed | tostring' 2>/dev/null || echo "unknown")
+        standby=$(echo "$health" | jq -r '.standby | tostring' 2>/dev/null || echo "unknown")
 
         local status_label=""
         if [ "$sealed" == "true" ]; then

@@ -58,7 +58,7 @@ log_info "Verifying Vault status..."
 HEALTH=$(curl "${CURL_OPTS[@]}" "$VAULT_ADDR/v1/sys/health" || echo '{}')
 [ -z "$HEALTH" ] && HEALTH='{}'
 
-SEALED=$(echo "$HEALTH" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
+SEALED=$(echo "$HEALTH" | jq -r '.sealed | tostring' 2>/dev/null || echo "unknown")
 if [ "$SEALED" != "false" ]; then
     log_error "Vault is sealed or unreachable (sealed=$SEALED). Raw response:"
     echo "$HEALTH"

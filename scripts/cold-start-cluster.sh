@@ -222,9 +222,9 @@ assess_vault_state() {
     http_code=$(echo "$http_code" | tr -d '[:space:]')
     [ -z "$http_code" ] && http_code="000"
 
-    VAULT_INITIALIZED=$(echo "$health" | jq -r '.initialized // "unknown"' 2>/dev/null || echo "unknown")
-    VAULT_SEALED=$(echo "$health" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
-    VAULT_STANDBY=$(echo "$health" | jq -r '.standby // "unknown"' 2>/dev/null || echo "unknown")
+    VAULT_INITIALIZED=$(echo "$health" | jq -r '.initialized | tostring' 2>/dev/null || echo "unknown")
+    VAULT_SEALED=$(echo "$health" | jq -r '.sealed | tostring' 2>/dev/null || echo "unknown")
+    VAULT_STANDBY=$(echo "$health" | jq -r '.standby | tostring' 2>/dev/null || echo "unknown")
 
     echo ""
     echo "  HTTP status:  $http_code"
@@ -257,7 +257,7 @@ assess_vault_state() {
             sleep 15
             elapsed=$((elapsed + 15))
             sealed=$(ssm_run "$NODE_0_ID" \
-                "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null | jq -r '.sealed // \"unknown\"'" || echo "unknown")
+                "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null | jq -r '.sealed | tostring'" || echo "unknown")
             sealed=$(echo "$sealed" | tr -d '[:space:]')
             [ -z "$sealed" ] && sealed="unknown"
             if [ "$sealed" = "false" ]; then
