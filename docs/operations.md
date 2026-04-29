@@ -322,15 +322,27 @@ Vault nodes have both `GetSecretValue` and `PutSecretValue` on these secrets, so
 
 ---
 
-## Recovery Key Regeneration
+## Recovery Key Rotation
 
-For clusters where recovery keys have been lost but a root token is still available.
+`scripts/rekey-recovery.sh` **rotates** existing recovery keys. It is NOT a
+mechanism to recover a cluster whose recovery keys have been lost.
 
-### When to Use
+> **If recovery keys are LOST**, see
+> [dr-lost-recovery-keys.md](dr-lost-recovery-keys.md) for the break-glass
+> rebuild procedure. No script can help you rotate keys you no longer hold —
+> Vault requires the current keys to authorize any rekey, by design.
 
-- Recovery keys are lost/unavailable
+### When to Use This Script
+
+Use `rekey-recovery.sh` when all of the following are true:
+
+- You have the CURRENT recovery keys (typically in AWS Secrets Manager at
+  `<cluster>/vault/recovery-keys`)
 - You have the root token
-- The cluster uses KMS auto-unseal
+- The cluster uses KMS auto-unseal (`seal_type=awskms`)
+- Cluster is unsealed and reachable
+
+Typical reasons: scheduled rotation, key-exposure incident, team-transition handoff.
 
 ### Usage
 
@@ -339,30 +351,34 @@ export VAULT_ADDR="https://vault.nonprod.example.io"
 export VAULT_TOKEN="<root-token>"
 
 ./scripts/rekey-recovery.sh
+# Enter current recovery keys when prompted.
 ```
 
-### How It Works
+### What It Does
 
-1. Verifies the cluster is unsealed and using KMS auto-unseal
-2. Initiates a recovery key rekey via the `/v1/sys/rekey-recovery-key/init` API
-3. Prompts for existing recovery keys to authorize the operation
-4. Outputs the new recovery keys
+1. Verifies cluster is unsealed and using KMS auto-unseal.
+2. Calls `POST /v1/sys/rekey-recovery-key/init` to start the rekey.
+3. Prompts for the required number of current recovery keys (threshold, usually 3 of 5).
+4. Emits the new recovery keys on completion.
 
-### Important Caveat
-
-Even with KMS auto-unseal, Vault requires **existing recovery keys** to authorize a recovery key rekey. If recovery keys are completely lost:
-
-- The rekey script will inform you of this requirement
-- **Workaround for fresh deployments**: Deploy a new cluster, restore a snapshot, and initialize with new recovery keys (the init process generates new keys)
-- Store the new recovery keys immediately using `./scripts/store-vault-credentials.sh`
-
-### After Rekeying
+### After Rotation
 
 ```bash
-# Store the new keys
-./scripts/store-vault-credentials.sh nonprod
-# (skip root token, enter the new recovery keys)
+# Store the new keys in Secrets Manager
+./scripts/store-vault-credentials.sh <env>
+# (skip root token prompt, enter the new recovery keys)
 ```
+
+### Why "just rebuild" isn't automated
+
+The rekey API's requirement for current keys is a Vault security property —
+the recovery keys are the strongest DR credential. A cluster that cannot prove
+possession of the current keys cannot rotate them, full stop. There is no API
+flag, token, or IAM-based bypass. That's why lost-keys recovery is a
+documented runbook ([dr-lost-recovery-keys.md](dr-lost-recovery-keys.md)),
+not a script: it involves standing up a fresh cluster, restoring from
+snapshot, initializing with new keys, and cutting traffic. It is operator-driven,
+multi-hour, and needs stakeholder awareness.
 
 ---
 

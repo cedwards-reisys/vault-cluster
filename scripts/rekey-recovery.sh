@@ -1,18 +1,31 @@
 #!/bin/bash
 #
-# rekey-recovery.sh - Regenerate recovery keys for Vault clusters with lost keys
+# rekey-recovery.sh - ROTATE recovery keys for a Vault cluster.
 #
-# When recovery keys are lost but a root token is available, this script
-# uses the Vault API to initiate and complete a recovery key rekey operation.
+# SCOPE — read before running:
+#   This script ROTATES (replaces) recovery keys. It is NOT a recovery
+#   mechanism for a cluster whose recovery keys have been lost.
 #
-# With KMS auto-unseal, the recovery key rekey can be authorized via the
-# root token through the API.
+#   Vault's rekey API requires the CURRENT recovery keys to authorize
+#   generation of new ones. This is a deliberate Vault security property
+#   (recovery keys are the strongest DR credential — a root token alone
+#   cannot rotate them).
+#
+#   If your recovery keys are LOST, this script CANNOT help you. See
+#   docs/dr-lost-recovery-keys.md for the break-glass procedure
+#   (fresh-deploy + snapshot-restore).
+#
+# Prerequisites:
+#   - Cluster uses KMS auto-unseal (SealType=awskms)
+#   - Cluster is unsealed and reachable
+#   - You have the CURRENT recovery keys and a root token
 #
 # Usage: ./scripts/rekey-recovery.sh
 #
 # Requires:
 #   VAULT_ADDR  - Vault address
 #   VAULT_TOKEN - Root token
+#   VAULT_CACERT - (optional) path to CA cert
 
 set -euo pipefail
 
@@ -125,13 +138,14 @@ log_info "Required keys: $REQUIRED"
 
 if [ "$REQUIRED" -gt 0 ] && [ "$PROGRESS" -eq 0 ]; then
     echo ""
-    log_warn "The rekey operation requires $REQUIRED existing recovery key(s) to proceed."
-    log_warn "If recovery keys are completely lost, you may need to:"
-    echo "  1. Unseal with KMS (already done - cluster is running)"
-    echo "  2. Use 'vault operator generate-root' if you have recovery keys"
-    echo "  3. Or redeploy the cluster from scratch"
+    log_warn "Vault requires $REQUIRED CURRENT recovery key(s) to authorize this rekey."
+    log_warn "This is a Vault security property, not a script limitation."
     echo ""
-    echo "Enter existing recovery keys (base64 encoded) to authorize the rekey:"
+    echo "If you have the current recovery keys, enter them below."
+    echo "If they are LOST, cancel now (Ctrl+C) and see:"
+    echo "  docs/dr-lost-recovery-keys.md   # break-glass procedure"
+    echo ""
+    echo "Enter existing recovery keys (base64 encoded):"
     echo ""
 
     KEYS_SUBMITTED=0
