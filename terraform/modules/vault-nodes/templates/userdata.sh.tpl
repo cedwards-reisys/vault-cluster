@@ -88,6 +88,39 @@ if ! grep -q "$DATA_DEVICE" /etc/fstab; then
     echo "$DATA_DEVICE $DATA_MOUNT xfs defaults,nofail 0 2" >> /etc/fstab
 fi
 
+# -----------------------------------------------------------------------------
+# EBS identity sentinel — defends against cross-cluster / cross-AZ volume
+# misattribution. Writes /opt/vault/data/.vault-node-id on first mount;
+# aborts if a later mount finds a mismatching sentinel (e.g., restored
+# EBS snapshot from a different cluster, or mis-tagged volume).
+# -----------------------------------------------------------------------------
+SENTINEL="$DATA_MOUNT/.vault-node-id"
+if [ -f "$SENTINEL" ]; then
+    EXISTING_ID=$(tr -d '[:space:]' < "$SENTINEL")
+    if [ "$EXISTING_ID" != "$NODE_ID" ]; then
+        echo "ERROR: EBS volume identity mismatch" >&2
+        echo "  expected: $NODE_ID" >&2
+        echo "  found:    $EXISTING_ID" >&2
+        echo "" >&2
+        echo "This volume appears to belong to a different cluster or AZ." >&2
+        echo "Refusing to proceed — would cause Raft node-id collision." >&2
+        echo "" >&2
+        echo "If this is intentional (e.g., DR reassignment of this volume)," >&2
+        echo "the operator must BOTH:" >&2
+        echo "  1. rm $SENTINEL                # drop identity claim" >&2
+        echo "  2. rm -rf $DATA_MOUNT/raft     # drop stale Raft log" >&2
+        echo "Without (2), Vault will start with peer/term entries from the" >&2
+        echo "wrong cluster and either refuse to join or corrupt replication." >&2
+        exit 1
+    fi
+    echo "Sentinel match: $EXISTING_ID"
+else
+    echo "Writing new sentinel: $NODE_ID"
+    umask 077
+    echo "$NODE_ID" > "$SENTINEL"
+    chmod 0600 "$SENTINEL"
+fi
+
 # Set ownership
 chown -R vault:vault /opt/vault
 

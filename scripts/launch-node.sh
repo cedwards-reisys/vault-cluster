@@ -393,10 +393,13 @@ main() {
         echo "AZ:          $AVAILABILITY_ZONE"
         echo ""
         echo "Check cluster status: ./cluster-status.sh $VAULT_ENV"
+        return 0
     else
         echo ""
         log_warn "Node launched but health check timed out"
         echo "Instance ID: $INSTANCE_ID"
+        log_warn "Inspect the node: aws ssm start-session --target $INSTANCE_ID --region $AWS_REGION"
+        return 1
     fi
 }
 

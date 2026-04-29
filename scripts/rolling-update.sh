@@ -157,6 +157,133 @@ get_az_index() {
     return 1
 }
 
+# Per-instance canary: prove this SPECIFIC new instance is truly healthy
+# before moving on to the next AZ. Prevents the "bad userdata rolls across
+# all 3 nodes" failure — catches the break on node 1 instead of node 2.
+#
+# Six checks, all must pass within CANARY_TIMEOUT (default 300s):
+#   1. SSM reachable on the instance (agent online)
+#   2. systemd says vault.service is active
+#   3. /v1/sys/health returns 200 (leader) or 429 (unsealed standby)
+#   4. node_id appears in Raft peer list (joined consensus)
+#   5. node_id has voter=true (not stuck as non-voter)
+#   6. peer_count from this node's view >= expected_peers (no split view)
+#
+# Args: <instance_id> <az> <expected_peers>
+# Returns: 0=healthy, 1=unhealthy (logs reason)
+canary_check_node() {
+    local instance_id="$1"
+    local az="$2"
+    local expected_peers="$3"
+    local my_node_id="${CLUSTER_NAME}-${az}"
+    local timeout="${CANARY_TIMEOUT:-300}"
+    local interval=15
+    local elapsed=0
+
+    log_step "Canary checks on $instance_id ($my_node_id, timeout ${timeout}s)..."
+
+    # Build the remote health probe as a single SSM command. Runs on the new
+    # instance and emits tab-separated output: <service_status>\t<http_code>
+    local probe_cmd='
+        status=$(systemctl is-active vault 2>/dev/null || echo "unknown");
+        http=$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" https://127.0.0.1:8200/v1/sys/health?standbyok=true 2>/dev/null || echo "000");
+        echo -e "${status}\t${http}"
+    '
+
+    while [ $elapsed -lt $timeout ]; do
+        # --- Remote probe via SSM ---
+        local params_file cmd_id
+        params_file=$(mktemp)
+        jq -n --arg cmd "$probe_cmd" '{"commands":[$cmd]}' > "$params_file"
+
+        cmd_id=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$instance_id" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "file://$params_file" \
+            --query 'Command.CommandId' \
+            --output text 2>/dev/null) || true
+        rm -f "$params_file"
+
+        local ssm_status="unreachable" service_status="unknown" http_code="000"
+        if [ -n "$cmd_id" ]; then
+            aws ssm wait command-executed \
+                --region "$AWS_REGION" \
+                --command-id "$cmd_id" \
+                --instance-id "$instance_id" 2>/dev/null || true
+
+            local probe_out
+            probe_out=$(aws ssm get-command-invocation \
+                --region "$AWS_REGION" \
+                --command-id "$cmd_id" \
+                --instance-id "$instance_id" \
+                --query 'StandardOutputContent' \
+                --output text 2>/dev/null || echo "")
+            if [ -n "$probe_out" ]; then
+                ssm_status="ok"
+                service_status=$(echo "$probe_out" | awk -F'\t' '{print $1}' | tr -d '[:space:]')
+                http_code=$(echo "$probe_out" | awk -F'\t' '{print $2}' | tr -d '[:space:]')
+                [ -z "$service_status" ] && service_status="unknown"
+                [ -z "$http_code" ] && http_code="000"
+            fi
+        fi
+
+        # --- Raft peer list from the leader (via local VAULT_ADDR) ---
+        local raft
+        raft=$(vault operator raft list-peers -format=json 2>/dev/null || echo '{}')
+        [ -z "$raft" ] && raft='{}'
+
+        # --- Apply decision logic ---
+        # (Checks ordered cheap-to-expensive for clear log messages)
+        if [ "$ssm_status" != "ok" ]; then
+            log_info "  SSM not reachable yet (waiting, ${elapsed}s/${timeout}s)..."
+        elif [ "$service_status" != "active" ]; then
+            log_info "  vault service status=$service_status (waiting, ${elapsed}s/${timeout}s)..."
+        else
+            case "$http_code" in
+                200|429)
+                    local node_present is_voter peer_count
+                    node_present=$(echo "$raft" | jq -r --arg id "$my_node_id" \
+                        '[.data.config.servers[]? | select(.node_id == $id)] | length' 2>/dev/null || echo "0")
+                    node_present=$(echo "$node_present" | tr -d '[:space:]')
+                    [ -z "$node_present" ] && node_present=0
+
+                    is_voter=$(echo "$raft" | jq -r --arg id "$my_node_id" \
+                        '.data.config.servers[]? | select(.node_id == $id) | .voter | tostring' 2>/dev/null || echo "false")
+                    is_voter=$(echo "$is_voter" | head -1 | tr -d '[:space:]')
+                    [ -z "$is_voter" ] && is_voter="false"
+
+                    peer_count=$(echo "$raft" | jq -r '.data.config.servers | length? // 0' 2>/dev/null || echo "0")
+                    peer_count=$(echo "$peer_count" | tr -d '[:space:]')
+                    [ -z "$peer_count" ] && peer_count=0
+
+                    if [ "$node_present" -eq 0 ] 2>/dev/null; then
+                        log_info "  $my_node_id not yet in Raft peer list (${elapsed}s/${timeout}s)..."
+                    elif [ "$is_voter" != "true" ]; then
+                        log_info "  $my_node_id is non-voter, awaiting promotion (${elapsed}s/${timeout}s)..."
+                    elif [ "$peer_count" -lt "$expected_peers" ] 2>/dev/null; then
+                        log_info "  $my_node_id peer view=$peer_count/$expected_peers (${elapsed}s/${timeout}s)..."
+                    else
+                        log_info "Canary PASS: $instance_id healthy (service=active, http=$http_code, voter=true, peers=$peer_count)"
+                        return 0
+                    fi
+                    ;;
+                *)
+                    log_info "  vault health HTTP=$http_code (waiting for unseal, ${elapsed}s/${timeout}s)..."
+                    ;;
+            esac
+        fi
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+
+    log_error "Canary TIMEOUT: $instance_id did not become healthy within ${timeout}s"
+    log_error "  last observed: ssm=$ssm_status service=$service_status http=$http_code"
+    log_error "  Inspect the node: aws ssm start-session --target $instance_id --region $AWS_REGION"
+    return 1
+}
+
 # Wait for cluster to be stable with expected peer count
 wait_for_cluster_stable() {
     local expected_peers="$1"
@@ -259,7 +386,35 @@ update_node() {
         exit 1
     fi
 
-    # Wait for cluster to be stable (node rejoins with same identity)
+    # Discover the new instance_id so the canary can probe it specifically.
+    # launch-node.sh tags instances with vault-az; pick the running one for this AZ.
+    local new_instance_id
+    new_instance_id=$(aws ec2 describe-instances \
+        --region "$AWS_REGION" \
+        --filters \
+            "Name=tag:vault-cluster,Values=$CLUSTER_NAME" \
+            "Name=tag:vault-az,Values=$az" \
+            "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].InstanceId' \
+        --output text 2>/dev/null | awk '{print $1}')
+
+    if [ -z "$new_instance_id" ] || [ "$new_instance_id" = "None" ]; then
+        log_error "Could not discover new instance in $az after launch"
+        exit 1
+    fi
+
+    # Per-instance canary: prove THIS instance is truly healthy before moving on.
+    # Fails loudly at node 1 if userdata/AMI/KMS is broken, preventing cascading
+    # failures across all three AZs.
+    if ! canary_check_node "$new_instance_id" "$az" "$initial_peers"; then
+        log_error "Canary check failed for $new_instance_id ($az)"
+        log_error "Halting rolling update — cluster is at N-0-failed state"
+        log_error "(2 old nodes still healthy + 1 new-broken node = quorum retained)"
+        log_error "Diagnose before re-running to avoid cascading failure to next AZ"
+        exit 1
+    fi
+
+    # Cluster-wide stability check (catches view from the leader)
     if ! wait_for_cluster_stable "$initial_peers"; then
         log_error "Cluster did not stabilize after updating node in $az"
         log_error "Manual intervention may be required"
