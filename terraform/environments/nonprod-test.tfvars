@@ -26,7 +26,7 @@ environment   = "nonprod-test"
 instance_type = "m8g.medium"
 
 # Access Control
-allowed_cidr_blocks = ["0.0.0.0/0"]
+allowed_cidr_blocks = ["10.0.0.0/8"]  # placeholder — override per-env
 
 # SSM Session Manager Logging
 ssm_logs_s3_bucket = "ssm-session-logs-nonprod"

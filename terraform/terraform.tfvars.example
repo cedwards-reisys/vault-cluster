@@ -27,7 +27,7 @@ instance_type = "m8g.medium"  # ARM64 Graviton
 
 # Access Control
 # Set to specific CIDRs to restrict access
-allowed_cidr_blocks = ["0.0.0.0/0"]
+allowed_cidr_blocks = ["10.0.0.0/8"]  # placeholder — override per-env
 
 # SSM Session Manager Logging
 ssm_logs_s3_bucket = "ssm-session-logs-nonprod"
