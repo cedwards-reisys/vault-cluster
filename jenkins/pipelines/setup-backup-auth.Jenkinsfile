@@ -48,6 +48,11 @@ node {
 path "sys/storage/raft/snapshot" {
   capabilities = ["read"]
 }
+
+# Required by backup-snapshot.sh Raft-consensus leader check (C4).
+path "sys/storage/raft/configuration" {
+  capabilities = ["read"]
+}
 POLICY
                             echo "Backup policy created."
 

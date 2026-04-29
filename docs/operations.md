@@ -555,6 +555,15 @@ vault policy write backup - <<EOF
 path "sys/storage/raft/snapshot" {
   capabilities = ["read"]
 }
+
+# Required by backup-snapshot.sh Raft-consensus leader check
+# (see C4 in review-findings.md). backup-snapshot.sh calls
+# 'vault operator raft list-peers' to confirm Raft consensus
+# before taking a snapshot, preventing corrupt backups during
+# network partitions.
+path "sys/storage/raft/configuration" {
+  capabilities = ["read"]
+}
 EOF
 
 # 3. Get the Vault IAM role ARN from Terraform outputs

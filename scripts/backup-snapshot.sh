@@ -100,7 +100,7 @@ fi
 log "Authenticating via AWS IAM auth..."
 VAULT_TOKEN=$(vault login -method=aws role=backup -token-only 2>/dev/null) || {
     log "ERROR: Failed to authenticate via AWS IAM auth. Is the auth method configured?"
-    log "See docs/backup-setup.md for setup instructions."
+    log "Run the setup-backup-auth Jenkins pipeline (or see docs/operations.md#backup-iam-auth-setup)."
     emit_metric "AuthFailure" 1 "$MY_AZ"
     exit 1
 }
