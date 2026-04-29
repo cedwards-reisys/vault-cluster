@@ -100,6 +100,64 @@ aws s3 ls s3://vault-nonprod-backups/vault-nonprod/weekly/ --recursive | sort -r
 aws s3 ls s3://vault-prod-backups/vault-prod/daily/ --recursive | sort -r | head -1
 ```
 
+## Daily Validation
+
+`scripts/validate-backup.sh` downloads the newest daily snapshot from S3 and
+runs `vault operator raft snapshot inspect` locally. It does NOT talk to a
+running Vault and does NOT require a token.
+
+What it catches:
+- Corrupted / truncated / HTML-error-page-masquerading-as-snapshot
+- Missing snapshots (backup timer broken)
+- Stale snapshots (older than `MAX_AGE_HOURS`, default 8)
+- Suspiciously small snapshots (smaller than `MIN_SIZE_BYTES`, default 10KB)
+- Empty snapshots (Raft Index == 0)
+
+What it does NOT catch:
+- Vault version incompatibility on restore
+- KMS / seal-type mismatch
+- Logical data corruption (valid bytes, wrong contents)
+
+For those, a full restore drill remains the only authoritative check. See
+"Cross-cluster restore" below for the closest thing we have today.
+
+### Running manually
+
+```bash
+./scripts/validate-backup.sh nonprod-test
+
+# With tuned thresholds:
+MAX_AGE_HOURS=12 MIN_SIZE_BYTES=50000 ./scripts/validate-backup.sh nonprod-test
+```
+
+Exit codes: `0` = pass, `1` = validation failed (reasons logged), `2` = preflight error.
+
+### Jenkins pipeline
+
+`jenkins/pipelines/validate-backup.Jenkinsfile` runs the script daily at
+**07:15 UTC** (one hour after the 06:00 UTC backup window — gives the 15-minute
+systemd timer jitter plenty of slack).
+
+Today: **nonprod-test only** (day-one scope per C5 decision). Extend to
+nonprod / prod by adding equivalent jobs in those folders.
+
+### CloudWatch metrics
+
+Emitted under namespace `Vault/BackupValidation`, dimensions `Cluster=<name>`,
+`Environment=<env>`:
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `Success` | Count | 1 on pass, 0 on fail |
+| `Failure` | Count | 1 on fail, 0 on pass |
+| `AgeHours` | None | Snapshot age at time of check |
+| `SizeBytes` | Bytes | Snapshot byte size |
+| `NoSnapshotsFound` | Count | Emitted when bucket is empty |
+| `DownloadFailure` | Count | Emitted when `s3 cp` fails |
+
+No paging configured on day-one (per C5 decision). Add an alarm on
+`Sum(Failure) > 0 over 24h` once enough baseline data is available.
+
 ## Manual Backup
 
 Take a snapshot anytime from an operator machine — no dependency on the systemd timer:
