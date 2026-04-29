@@ -389,8 +389,9 @@ main() {
 
         # Check if this is the leader (match by AZ suffix since node_id = cluster-az)
         local is_leader
-        is_leader=$(vault operator raft list-peers -format=json | jq -r --arg az "$az" \
-            '.data.config.servers[] | select(.node_id | endswith($az)) | .leader')
+        is_leader=$(vault operator raft list-peers -format=json 2>/dev/null | jq -r --arg az "$az" \
+            '.data.config.servers[]? | select(.node_id | endswith($az)) | .leader' 2>/dev/null || echo "false")
+        [ -z "$is_leader" ] && is_leader="false"
 
         if [ "$is_leader" == "true" ]; then
             leader_instance="$instance_id"

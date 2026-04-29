@@ -59,11 +59,16 @@ if [ ! -f "$VAR_FILE" ]; then
     exit 1
 fi
 
-BACKUP_S3_BUCKET=$(grep '^backup_s3_bucket' "$VAR_FILE" | sed 's/.*= *"\(.*\)"/\1/')
-CLUSTER_NAME=$(grep '^cluster_name' "$VAR_FILE" | sed 's/.*= *"\(.*\)"/\1/')
+BACKUP_S3_BUCKET=$(grep '^backup_s3_bucket' "$VAR_FILE" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || true)
+CLUSTER_NAME=$(grep '^cluster_name' "$VAR_FILE" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || true)
 
 if [ -z "$BACKUP_S3_BUCKET" ]; then
     log_error "backup_s3_bucket not found in $VAR_FILE"
+    exit 1
+fi
+
+if [ -z "$CLUSTER_NAME" ]; then
+    log_error "cluster_name not found in $VAR_FILE"
     exit 1
 fi
 

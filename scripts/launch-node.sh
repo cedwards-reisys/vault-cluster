@@ -84,7 +84,12 @@ get_config() {
     INSTANCE_TAGS_JSON=$(cfg_get instance_tags)
 
     # Subnets (JSON array in vault-config)
-    SUBNET_IDS=($(cfg_get private_subnet_ids | jq -r '.[]'))
+    # shellcheck disable=SC2207  # intentional word-split; bash 3.2 lacks mapfile
+    SUBNET_IDS=($(cfg_get private_subnet_ids | jq -r '.[]? // empty'))
+    if [ "${#SUBNET_IDS[@]}" -eq 0 ]; then
+        log_error "No private_subnet_ids in vault-config for $CLUSTER_NAME"
+        exit 1
+    fi
 
     # Look up latest AL2023 ARM64 AMI (same filter as terraform)
     log_info "Looking up latest AMI..."
@@ -99,17 +104,22 @@ get_config() {
         --output text)
 
     # Look up security group by name convention
+    # shellcheck disable=SC2207  # intentional word-split; bash 3.2 lacks mapfile
     SECURITY_GROUP_IDS=($(aws ec2 describe-security-groups \
         --region "$AWS_REGION" \
         --filters "Name=group-name,Values=${CLUSTER_NAME}-vault-sg" \
         --query 'SecurityGroups[].GroupId' \
         --output text))
+    if [ "${#SECURITY_GROUP_IDS[@]}" -eq 0 ]; then
+        log_error "Security group ${CLUSTER_NAME}-vault-sg not found"
+        exit 1
+    fi
 
     # Merge additional security group IDs from config (if any)
-    ADDITIONAL_SGS=$(cfg_get additional_security_group_ids | jq -r '.[]' 2>/dev/null)
+    ADDITIONAL_SGS=$(cfg_get additional_security_group_ids 2>/dev/null | jq -r '.[]? // empty' 2>/dev/null || true)
     if [ -n "$ADDITIONAL_SGS" ]; then
         while read -r sg; do
-            SECURITY_GROUP_IDS+=("$sg")
+            [ -n "$sg" ] && SECURITY_GROUP_IDS+=("$sg")
         done <<< "$ADDITIONAL_SGS"
     fi
 
@@ -213,7 +223,7 @@ launch_instance() {
 
     local tag_spec_file
     tag_spec_file=$(build_tag_spec_file)
-    trap "rm -f '$tag_spec_file'" RETURN
+    trap 'rm -f "$tag_spec_file"' RETURN
 
     INSTANCE_ID=$(aws ec2 run-instances \
         --region "$AWS_REGION" \

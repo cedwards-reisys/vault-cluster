@@ -44,8 +44,8 @@ if [ ! -f "$VAR_FILE" ]; then
     exit 1
 fi
 
-CLUSTER_NAME=$(grep '^cluster_name' "$VAR_FILE" | sed 's/.*= *"\(.*\)"/\1/')
-AWS_REGION=$(grep '^aws_region' "$VAR_FILE" | sed 's/.*= *"\(.*\)"/\1/')
+CLUSTER_NAME=$(grep '^cluster_name' "$VAR_FILE" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || true)
+AWS_REGION=$(grep '^aws_region' "$VAR_FILE" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || true)
 
 if [ -z "$CLUSTER_NAME" ] || [ -z "$AWS_REGION" ]; then
     log_error "Could not parse cluster_name or aws_region from $VAR_FILE"

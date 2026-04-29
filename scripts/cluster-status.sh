@@ -79,14 +79,14 @@ if [ -n "${VAULT_TOKEN:-}" ]; then
     if echo "$raft_peers" | jq -e '.error' >/dev/null 2>&1; then
         echo -e "${YELLOW}Cannot get Raft status (token may lack permissions)${NC}"
     else
-        peer_count=$(echo "$raft_peers" | jq -r '.data.config.servers | length')
+        peer_count=$(echo "$raft_peers" | jq -r '.data.config.servers | length? // 0')
         echo "Total Peers: $peer_count"
         echo ""
         echo "Peers:"
-        echo "$raft_peers" | jq -r '.data.config.servers[] | "  [\(if .leader then "LEADER" else "FOLLOWER" end)] \(.node_id) - \(.address)"'
+        echo "$raft_peers" | jq -r '.data.config.servers[]? | "  [\(if .leader then "LEADER" else "FOLLOWER" end)] \(.node_id) - \(.address)"'
 
         # Check for any non-voter peers
-        non_voters=$(echo "$raft_peers" | jq -r '[.data.config.servers[] | select(.voter == false)] | length')
+        non_voters=$(echo "$raft_peers" | jq -r '[.data.config.servers[]? | select(.voter == false)] | length')
         if [ "$non_voters" -gt 0 ]; then
             echo -e "${YELLOW}Warning: $non_voters non-voter peer(s) detected${NC}"
         fi

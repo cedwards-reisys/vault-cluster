@@ -56,15 +56,18 @@ echo ""
 # Verify connection and seal type
 log_info "Verifying Vault status..."
 HEALTH=$(curl "${CURL_OPTS[@]}" "$VAULT_ADDR/v1/sys/health" || echo '{}')
+[ -z "$HEALTH" ] && HEALTH='{}'
 
-SEALED=$(echo "$HEALTH" | jq -r '.sealed')
+SEALED=$(echo "$HEALTH" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
 if [ "$SEALED" != "false" ]; then
-    log_error "Vault is sealed or unreachable"
+    log_error "Vault is sealed or unreachable (sealed=$SEALED). Raw response:"
+    echo "$HEALTH"
     exit 1
 fi
 
-SEAL_STATUS=$(curl "${CURL_OPTS[@]}" -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/sys/seal-status")
-SEAL_TYPE=$(echo "$SEAL_STATUS" | jq -r '.type // "unknown"')
+SEAL_STATUS=$(curl "${CURL_OPTS[@]}" -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/sys/seal-status" || echo '{}')
+[ -z "$SEAL_STATUS" ] && SEAL_STATUS='{}'
+SEAL_TYPE=$(echo "$SEAL_STATUS" | jq -r '.type // "unknown"' 2>/dev/null || echo "unknown")
 
 if [ "$SEAL_TYPE" != "awskms" ]; then
     log_error "Expected seal type 'awskms', got '$SEAL_TYPE'"
@@ -103,24 +106,22 @@ INIT_RESPONSE=$(curl "${CURL_OPTS[@]}" \
     -X PUT \
     -H "X-Vault-Token: $VAULT_TOKEN" \
     -d "{\"secret_shares\": $KEY_SHARES, \"secret_threshold\": $KEY_THRESHOLD, \"require_verification\": false}" \
-    "$VAULT_ADDR/v1/sys/rekey-recovery-key/init")
+    "$VAULT_ADDR/v1/sys/rekey-recovery-key/init" || echo '{}')
+[ -z "$INIT_RESPONSE" ] && INIT_RESPONSE='{}'
 
-NONCE=$(echo "$INIT_RESPONSE" | jq -r '.nonce // empty')
+NONCE=$(echo "$INIT_RESPONSE" | jq -r '.nonce // empty' 2>/dev/null || echo "")
 
 if [ -z "$NONCE" ]; then
     log_error "Failed to initialize rekey. Response:"
-    echo "$INIT_RESPONSE" | jq '.'
+    echo "$INIT_RESPONSE"
     exit 1
 fi
 
-log_info "Rekey initialized. Nonce: $NONCE"
-log_info "Required keys: $(echo "$INIT_RESPONSE" | jq -r '.required')"
+REQUIRED=$(echo "$INIT_RESPONSE" | jq -r '.required // 0' 2>/dev/null || echo "0")
+PROGRESS=$(echo "$INIT_RESPONSE" | jq -r '.progress // 0' 2>/dev/null || echo "0")
 
-# With KMS auto-unseal, the recovery key rekey needs existing recovery keys
-# to authorize. But since those are lost, we check if the API allows root
-# token authorization directly.
-REQUIRED=$(echo "$INIT_RESPONSE" | jq -r '.required')
-PROGRESS=$(echo "$INIT_RESPONSE" | jq -r '.progress')
+log_info "Rekey initialized. Nonce: $NONCE"
+log_info "Required keys: $REQUIRED"
 
 if [ "$REQUIRED" -gt 0 ] && [ "$PROGRESS" -eq 0 ]; then
     echo ""

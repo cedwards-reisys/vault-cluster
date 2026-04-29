@@ -157,18 +157,17 @@ check_no_leader() {
     local has_leader=false
 
     for i in $(seq 0 $((INSTANCE_COUNT - 1))); do
-        local iid ip name
+        local iid ip
         iid=$(echo "$INSTANCES_JSON" | jq -r ".[$i].InstanceId")
         ip=$(echo "$INSTANCES_JSON" | jq -r ".[$i].PrivateIp")
-        name=$(echo "$INSTANCES_JSON" | jq -r ".[$i].Name // \"unnamed\"")
 
         local health
         health=$(ssm_run "$iid" "curl -sk https://127.0.0.1:8200/v1/sys/health -o /dev/stdout -w '' 2>/dev/null || echo '{}'") || health='{}'
+        [ -z "$health" ] && health='{}'
 
-        local sealed standby initialized
-        initialized=$(echo "$health" | jq -r '.initialized')
-        sealed=$(echo "$health" | jq -r '.sealed')
-        standby=$(echo "$health" | jq -r '.standby')
+        local sealed standby
+        sealed=$(echo "$health" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
+        standby=$(echo "$health" | jq -r '.standby // "unknown"' 2>/dev/null || echo "unknown")
 
         local status_label=""
         if [ "$sealed" == "true" ]; then
@@ -307,7 +306,7 @@ wait_for_peers_rejoin() {
         peer_count=$(ssm_run "$RECOVERY_NODE" \
             "VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/opt/vault/tls/ca.crt vault operator raft list-peers -format=json 2>/dev/null | jq '.data.config.servers | length'" \
             || true)
-        peer_count=$(echo "$peer_count" | grep -oE '^[0-9]+$' | head -1)
+        peer_count=$(echo "$peer_count" | grep -oE '^[0-9]+$' | head -1 || true)
         peer_count="${peer_count:-0}"
 
         if [ "$peer_count" -ge "$expected_peers" ]; then

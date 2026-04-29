@@ -47,7 +47,7 @@ fi
 
 # Generate CA in a temp directory
 WORK_DIR=$(mktemp -d)
-trap "rm -rf '$WORK_DIR'" EXIT
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 log_info "Generating CA for cluster: $CLUSTER_NAME"
 
@@ -65,7 +65,7 @@ log_info "CA generated successfully."
 
 # Display certificate info
 echo ""
-openssl x509 -in "$WORK_DIR/ca.crt" -text -noout | grep -A2 "Subject:"
+openssl x509 -in "$WORK_DIR/ca.crt" -text -noout | grep -A2 "Subject:" || true
 echo ""
 
 # Store in Secrets Manager

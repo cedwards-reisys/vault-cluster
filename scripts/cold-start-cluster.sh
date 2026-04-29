@@ -155,6 +155,11 @@ launch_node_0() {
         --query 'Reservations[].Instances[] | sort_by(@, &LaunchTime) | [-1].InstanceId' \
         --output text)
 
+    if [ -z "$NODE_0_ID" ] || [ "$NODE_0_ID" = "None" ]; then
+        log_error "launch-node.sh did not produce a running instance for cluster $CLUSTER_NAME"
+        exit 1
+    fi
+
     NODE_0_IP=$(aws ec2 describe-instances \
         --region "$AWS_REGION" \
         --instance-ids "$NODE_0_ID" \
@@ -209,15 +214,17 @@ assess_vault_state() {
     local health
     health=$(ssm_run "$NODE_0_ID" \
         "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null || echo '{}'") || health='{}'
+    [ -z "$health" ] && health='{}'
 
     local http_code
     http_code=$(ssm_run "$NODE_0_ID" \
         "curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8200/v1/sys/health 2>/dev/null || echo 000") || true
     http_code=$(echo "$http_code" | tr -d '[:space:]')
+    [ -z "$http_code" ] && http_code="000"
 
-    VAULT_INITIALIZED=$(echo "$health" | jq -r '.initialized // "unknown"')
-    VAULT_SEALED=$(echo "$health" | jq -r '.sealed // "unknown"')
-    VAULT_STANDBY=$(echo "$health" | jq -r '.standby // "unknown"')
+    VAULT_INITIALIZED=$(echo "$health" | jq -r '.initialized // "unknown"' 2>/dev/null || echo "unknown")
+    VAULT_SEALED=$(echo "$health" | jq -r '.sealed // "unknown"' 2>/dev/null || echo "unknown")
+    VAULT_STANDBY=$(echo "$health" | jq -r '.standby // "unknown"' 2>/dev/null || echo "unknown")
 
     echo ""
     echo "  HTTP status:  $http_code"
@@ -241,27 +248,29 @@ assess_vault_state() {
     fi
 
     # Case 3: Sealed (KMS auto-unseal should handle this — wait longer)
-    if [ "$VAULT_SEALED" == "true" ]; then
-        log_warn "Vault is sealed — waiting for KMS auto-unseal..."
+    if [ "$VAULT_SEALED" != "false" ]; then
+        log_warn "Vault is sealed or state unknown (sealed=$VAULT_SEALED) — waiting for KMS auto-unseal..."
         local max_wait=120
         local elapsed=0
+        local sealed="$VAULT_SEALED"
         while [ $elapsed -lt $max_wait ]; do
             sleep 15
             elapsed=$((elapsed + 15))
-            local sealed
             sealed=$(ssm_run "$NODE_0_ID" \
-                "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null | jq -r '.sealed'" || echo "true")
+                "curl -sk https://127.0.0.1:8200/v1/sys/health 2>/dev/null | jq -r '.sealed // \"unknown\"'" || echo "unknown")
             sealed=$(echo "$sealed" | tr -d '[:space:]')
-            if [ "$sealed" == "false" ]; then
+            [ -z "$sealed" ] && sealed="unknown"
+            if [ "$sealed" = "false" ]; then
                 log_info "Vault auto-unsealed successfully"
                 break
             fi
-            log_info "Still sealed (${elapsed}s/${max_wait}s)..."
+            log_info "Still sealed/unknown (sealed=$sealed, ${elapsed}s/${max_wait}s)..."
         done
 
-        if [ "$sealed" == "true" ]; then
-            log_error "Vault did not auto-unseal — check KMS key and IAM permissions"
-            log_error "Debug: aws ssm start-session --target $NODE_0_ID --region $AWS_REGION"
+        # Strict check: only proceed to destructive recovery if we can *prove* unsealed.
+        if [ "$sealed" != "false" ]; then
+            log_error "Vault did not confirm unsealed (sealed=$sealed) — aborting before destructive recovery"
+            log_error "Check KMS key and IAM permissions, or debug: aws ssm start-session --target $NODE_0_ID --region $AWS_REGION"
             exit 1
         fi
     fi
@@ -379,7 +388,7 @@ launch_remaining_nodes() {
         peer_count=$(ssm_run "$NODE_0_ID" \
             "VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/opt/vault/tls/ca.crt vault operator raft list-peers -format=json 2>/dev/null | jq '.data.config.servers | length'" \
             || true)
-        peer_count=$(echo "$peer_count" | grep -oE '^[0-9]+$' | head -1)
+        peer_count=$(echo "$peer_count" | grep -oE '^[0-9]+$' | head -1 || true)
         peer_count="${peer_count:-0}"
 
         if [ "$peer_count" -ge "$total_nodes" ]; then

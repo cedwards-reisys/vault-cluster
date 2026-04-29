@@ -100,11 +100,14 @@ VAULT_ADDR="$VAULT_TEST_ADDR" VAULT_TOKEN="$VAULT_TEST_TOKEN" \
 # Clean up
 rm -f "$SNAP_FILE"
 
-# Verify
+# Verify (post-restore, nonprod token is valid on nonprod-test)
 log_info "Verifying nonprod-test..."
 sleep 5
-VAULT_ADDR="$VAULT_TEST_ADDR" VAULT_TOKEN="$VAULT_NONPROD_TOKEN" \
-    vault status || true
+if ! VAULT_ADDR="$VAULT_TEST_ADDR" VAULT_TOKEN="$VAULT_NONPROD_TOKEN" vault status; then
+    log_error "Post-restore vault status check failed on $VAULT_TEST_ADDR"
+    log_error "The snapshot may have been applied but the cluster is not healthy."
+    exit 1
+fi
 
 echo ""
 echo "=================================="
