@@ -260,3 +260,4 @@ With leader-only health checks (`/v1/sys/health`, matcher `200`), only the activ
 | Backup timer never fires | Backup not enabled in tfvars or node not replaced after enabling | `systemctl list-timers vault-backup*` |
 | Node healthy locally but NLB says unhealthy | Node is standby (expected with leader-only health check) | `curl -sk https://127.0.0.1:8200/v1/sys/health` — check for 429 |
 | "unsupported field" in Vault logs | Config field moved between Vault versions | Check `journalctl -u vault` for the specific field |
+| All nodes deleted, node 0 stuck (no leader, unsealed) | Single node can't achieve quorum against old 3-node Raft membership | `./cold-start-cluster.sh <env> --yes` |
