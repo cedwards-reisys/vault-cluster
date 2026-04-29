@@ -250,6 +250,50 @@ aws elbv2 describe-target-health \
 
 With leader-only health checks (`/v1/sys/health`, matcher `200`), only the active leader shows as healthy. Standby nodes show unhealthy — this is expected.
 
+## Multi-AZ Loss (regional degradation)
+
+Two of three AZs become unreachable simultaneously (regional outage, VPC /
+subnet misconfiguration, transit gateway failure). One node survives but
+has no quorum — Raft goes read-only / leaderless.
+
+**Persistent EBS implication:** the data in the lost AZs is still on disk
+(EBS volumes survive AZ outages as long as the AZ comes back). But until the
+other AZs return, the surviving node can't form quorum with itself.
+
+Triage:
+
+1. Confirm it's AZ-level, not instance-level:
+   ```bash
+   aws ec2 describe-availability-zones --region <region> \
+     --query 'AvailabilityZones[].[ZoneName,State]' --output table
+   ```
+
+2. Check the surviving node:
+   ```bash
+   ./scripts/cluster-status.sh <env>
+   # Expect: 1 running instance, 3 peers in Raft config (two unreachable)
+   ```
+
+3. **DO NOT** run `cold-start-cluster.sh` while the AZs are merely
+   unreachable — that wipes stale Raft on the two "recovered" nodes when
+   they return and converts the cluster to single-node-bootstrap mode.
+   Destructive.
+
+Recovery paths:
+
+- **If AZs are expected to return within RPO/RTO window:** wait. The
+  surviving node holds Raft state. When the other two AZs come back, their
+  instances will auto-start (or can be launched via `launch-node.sh`), and
+  Raft will re-form quorum automatically.
+
+- **If AZs are declared lost (weeks+, or permanent):** treat as cluster
+  rebuild. Take a snapshot from the surviving node if possible (works
+  without quorum — `vault operator raft snapshot save`), then follow the
+  break-glass rebuild procedure in `docs/dr-lost-recovery-keys.md`.
+
+- **If the surviving node is ALSO lost:** worst case. Fall back to the
+  latest S3 snapshot and rebuild from scratch.
+
 ## Common Failure Patterns
 
 | Symptom | Likely Cause | Debug Command |
@@ -261,3 +305,7 @@ With leader-only health checks (`/v1/sys/health`, matcher `200`), only the activ
 | Node healthy locally but NLB says unhealthy | Node is standby (expected with leader-only health check) | `curl -sk https://127.0.0.1:8200/v1/sys/health` — check for 429 |
 | "unsupported field" in Vault logs | Config field moved between Vault versions | Check `journalctl -u vault` for the specific field |
 | All nodes deleted, node 0 stuck (no leader, unsealed) | Single node can't achieve quorum against old 3-node Raft membership | `./cold-start-cluster.sh <env> --yes` |
+| Userdata aborts with "EBS volume identity mismatch" | Volume's `.vault-node-id` sentinel doesn't match current cluster/AZ (often: restored snapshot, mis-tagged volume) | See the error message — lists exact wipe steps for intentional reassignment |
+| Rolling update halted "canary check failed" | The new instance launched but failed 1 of 6 health checks before the canary timeout | Check `aws ssm start-session` + `journalctl -u vault` on the instance — diagnose BEFORE retrying to avoid cascading failure |
+| Rolling update interrupted (Jenkins killed, Ctrl+C) | Partial state — one AZ missing its instance | See "Resume After Interrupted Rolling Update" in `docs/rolling-updates.md` |
+| Only one AZ surviving, cluster leaderless | Multi-AZ loss (regional outage) | See "Multi-AZ Loss" section above — do NOT run cold-start |

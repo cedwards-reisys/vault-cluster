@@ -45,6 +45,7 @@ A production-ready 3-node HashiCorp Vault cluster deployed on AWS using OpenTofu
 - **Auto-join**: New nodes automatically discover and join the cluster via AWS tags
 - **Persistent Storage**: 200GB dedicated EBS volumes per AZ survive instance replacement
 - **Stable Node Identity**: Node IDs are AZ-based, enabling seamless instance replacement
+- **EBS Identity Sentinel**: Volume attaches abort if the volume's recorded cluster/AZ doesn't match the mounting node (guards against restored snapshots and mis-tagged volumes)
 - **Internal NLB**: Network Load Balancer in private subnets with TLS termination (ACM cert)
 - **TLS Everywhere**:
   - Client → NLB: TLS with ACM certificate (port 443)
@@ -52,8 +53,10 @@ A production-ready 3-node HashiCorp Vault cluster deployed on AWS using OpenTofu
   - Node → Node: Mutual TLS with self-signed CA (port 8201)
 - **Client IP Preservation**: NLB preserves source IP for audit logs
 - **Multi-Environment**: Separate state and configuration for nonprod-test, nonprod, and prod
-- **Automated Backups**: Leader-only Raft snapshots to S3 every 6 hours via systemd timer
-- **CloudWatch Monitoring**: Alarms for NLB health and EBS performance
+- **Automated Backups**: Raft-consensus-verified leader-only snapshots to S3 every 6 hours (checks Raft peer list, not just local `standby:false`, to prevent corrupt backups during partitions)
+- **Daily Backup Validation**: Jenkins pipeline downloads the latest snapshot and runs `vault operator raft snapshot inspect` to catch corruption, truncation, staleness before it's needed
+- **Per-Instance Canary on Rolling Updates**: After each node replacement, `rolling-update.sh` verifies the new instance individually (SSM reachable, vault active, unsealed, joined Raft as voter, full peer view) before moving to the next AZ — catches bad userdata / AMI on node 1 instead of node 2
+- **CloudWatch Metrics**: Backup success/failure, skip reasons, snapshot age, validation pass/fail
 - **Credential Management**: Root tokens and recovery keys stored in AWS Secrets Manager
 - **SSM Session Manager**: Secure node access with S3 and CloudWatch logging
 - **Script-Based Operations**: Node lifecycle managed by scripts (not Terraform) for safe rolling updates
@@ -80,10 +83,13 @@ Edit the environment file for your target environment:
 ```bash
 # Edit terraform/environments/nonprod-test.tfvars (or nonprod.tfvars, prod.tfvars)
 # Set: vpc_id, subnet IDs, ACM cert ARN, etc.
-
-# Edit terraform/backend-configs/nonprod-test.hcl (or nonprod.hcl, prod.hcl)
-# Set: S3 bucket name for Terraform state
+# allowed_cidr_blocks defaults to 10.0.0.0/8 as a fail-closed placeholder —
+# override per-env with your real allowlist at deploy time.
 ```
+
+The `terraform/backend-configs/*.hcl` files are placeholders; real backend
+values (S3 bucket names) are supplied at `tofu init` time (or via Jenkins
+pipeline parameters). See `docs/operations.md` for the pattern.
 
 ### 2. Generate CA Certificate
 
@@ -293,17 +299,23 @@ aws ec2 describe-instances \
 
 ### Rolling Updates (AMI or Vault Version)
 
-See [docs/rolling-updates.md](docs/rolling-updates.md) for the full runbook.
+See [docs/rolling-updates.md](docs/rolling-updates.md) for the full runbook, including the per-instance canary behavior and how to resume after an interrupted update.
 
 ```bash
 # Update vault_version in terraform/environments/nonprod-test.tfvars, then:
 VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh
+  ./scripts/rolling-update.sh nonprod-test
 ```
+
+After each node replacement, the script runs a 6-check canary against the
+new instance (SSM, vault service, unsealed, Raft membership, voter status,
+full peer view) before moving to the next AZ. On canary failure the script
+halts with the cluster at N-0-failed (2 old + 1 new-broken, quorum retained)
+so operators can diagnose before cascading the failure.
 
 ### Backup and Restore
 
-Automated backups run every 6 hours on the leader node when `backup_enabled = true`. See [docs/operations.md](docs/operations.md) for full details.
+Automated backups run every 6 hours on the leader node when `backup_enabled = true`. The backup script verifies Raft consensus (not just local `standby:false`) before taking a snapshot — prevents corrupt backups during partitions. See [docs/backups.md](docs/backups.md) for full details and [docs/dr-lost-recovery-keys.md](docs/dr-lost-recovery-keys.md) for break-glass DR procedures.
 
 ```bash
 # Manual snapshot
@@ -314,6 +326,10 @@ vault operator raft snapshot save backup.snap
 
 # Sync nonprod data to nonprod-test
 ./scripts/sync-to-nonprod-test.sh
+
+# Daily validation runs via Jenkins (validate-backup.Jenkinsfile).
+# Run manually to check latest snapshot integrity:
+./scripts/validate-backup.sh nonprod-test
 ```
 
 ## Why Scripts Instead of ASG?
@@ -395,12 +411,19 @@ With KMS auto-unseal, this shouldn't happen. If it does:
 
 ### Health Check Failures
 
-NLB health checks use HTTPS on `/v1/sys/health?standby=true&perfstandbyok=true`. With these query params, all healthy nodes (active and standby) return 200.
+NLB health check is HTTPS on `/v1/sys/health` with matcher=200 (no query
+params). Because unmodified `/v1/sys/health` returns 200 **only on the
+active leader** (standbys return 429), the NLB marks only the leader as
+healthy and routes all traffic to it. This is by design, but it means
+a "healthy" NLB target count of 1/3 is expected — not a failure.
 
-If failing:
+If the leader is also failing:
 1. SSH to node and check `vault status`
 2. Check `/var/log/vault-setup.log` for bootstrap issues
 3. Verify certificates are valid: `openssl x509 -in /opt/vault/tls/node.crt -text`
+4. Userdata now aborts early if EBS sentinel mismatches — check for
+   "EBS volume identity mismatch" in the log (means the volume doesn't
+   match this cluster/AZ; see troubleshooting.md)
 
 ### EBS Volume Issues
 
@@ -411,6 +434,23 @@ aws ec2 describe-volumes --volume-ids <vol-id>
 # If stuck "in-use" after instance termination, force detach
 aws ec2 detach-volume --volume-id <vol-id> --force
 ```
+
+For the full troubleshooting catalog — including multi-AZ loss, interrupted
+rolling updates, EBS sentinel mismatches, stale Raft state — see
+[docs/troubleshooting.md](docs/troubleshooting.md).
+
+## Documentation
+
+| Doc | Purpose |
+|---|---|
+| [docs/operations.md](docs/operations.md) | Day-2 operations: multi-env wrappers, backup setup, credential management, recovery key rotation |
+| [docs/backups.md](docs/backups.md) | Backup architecture, S3 layout, daily validation pipeline, manual / cross-cluster restore |
+| [docs/rolling-updates.md](docs/rolling-updates.md) | Rolling-update runbook, per-instance canary, rollback, resume after interruption |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | SSM debugging, Raft issues, EBS sentinel, multi-AZ loss, common failure patterns |
+| [docs/migration.md](docs/migration.md) | Fresh-deploy + snapshot-restore migration from legacy Vault clusters |
+| [docs/dr-lost-recovery-keys.md](docs/dr-lost-recovery-keys.md) | Break-glass DR: lost recovery keys, lost root token, both lost |
+| [docs/jenkins.md](docs/jenkins.md) | Jenkins pipeline catalog and cross-account auth |
+| [docs/review-findings.md](docs/review-findings.md) | Tracker for the multi-agent review (2026-04-29) — open/done/wontfix findings and deferred work |
 
 ## Cost Optimization
 

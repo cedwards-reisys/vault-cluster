@@ -12,6 +12,19 @@ The Vault cluster uses script-based node management with persistent EBS volumes.
 - **Stable Node IDs**: Node IDs are AZ-based (`cluster-us-east-1a`), not instance-based
 - **No Raft Membership Changes**: When a node is replaced, it rejoins with the same identity
 - **One Node at a Time**: Scripts ensure only one node is updated at a time
+- **Per-instance Canary**: After each launch, `rolling-update.sh` verifies THIS new instance is truly healthy (SSM reachable, vault service active, unsealed, joined Raft, voter=true, full peer view) before moving to the next AZ
+
+### Why Raft peer list shows stable entries across replacements
+
+Because node IDs are `<cluster-name>-<az>` and don't change when an instance
+is replaced, `vault operator raft list-peers` continues to show 3 peers with
+the same IDs during and after rolling updates. The new instance takes over
+the existing peer slot — no `raft add-peer` / `raft remove-peer` churn.
+
+This also means: if cluster topology ever changes (e.g., expanding from 3 to
+5 AZs), the old peer slots will NOT auto-clean from Raft config. That's a
+deliberate topology change, not a rollout, and should be handled with an
+explicit `vault operator raft remove-peer` for each retired AZ slot.
 
 ### Architecture
 
@@ -245,6 +258,53 @@ If the new Vault version has issues:
    ```bash
    ./scripts/rolling-update.sh --skip-terraform
    ```
+
+### Resume After Interrupted Rolling Update
+
+If `rolling-update.sh` was killed mid-run (Jenkins job cancelled, operator
+Ctrl+C, VPN drop, canary failure), the cluster is in a partial state. The
+most common point of interruption is between `terminate-node.sh` and
+`launch-node.sh` — one AZ has no running instance but the other two are
+healthy.
+
+**Cluster is safe (still has quorum) but degraded** — don't leave it here.
+
+Steps to resume:
+
+1. Identify which AZ is missing its instance:
+   ```bash
+   ./scripts/cluster-status.sh <env>
+   # Compare "Running instances" vs "Raft peers" — the AZ in the Raft peer
+   # list but NOT in running instances is the one that needs relaunching.
+   ```
+
+2. Confirm the EBS volume for that AZ is `available` (not attached to a
+   zombie instance):
+   ```bash
+   aws ec2 describe-volumes \
+     --filters "Name=tag:vault-cluster,Values=vault-<env>" \
+              "Name=tag:vault-az,Values=us-east-2a" \
+     --query 'Volumes[].[VolumeId,State,Attachments[].InstanceId]' \
+     --output table
+   ```
+
+3. Relaunch the missing node. `launch-node.sh` is idempotent — it will
+   re-attach the existing EBS volume and the node will rejoin Raft with the
+   same identity:
+   ```bash
+   VAULT_ENV=<env> ./scripts/launch-node.sh <env> <az-index>
+   ```
+
+4. Wait for it to be healthy, then re-run the rolling update to finish
+   the remaining AZs:
+   ```bash
+   ./scripts/rolling-update.sh <env> --skip-terraform
+   ```
+   (`--skip-terraform` because the tofu apply already ran before the interruption.)
+
+If the interruption was caused by a canary failure, DO NOT re-run
+`rolling-update.sh` until you've diagnosed why the new instance failed the
+canary. Re-running blindly may just break a second node.
 
 ### Reset a Corrupted Node
 
