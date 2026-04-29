@@ -68,6 +68,8 @@ vault-cluster/
     cluster-status          # Health check
     backup-restore          # Take/restore snapshots
     setup-backup-auth       # One-time: configure Vault IAM auth for backups
+    setup-audit             # One-time: enable Vault audit device (file)
+    validate-backup         # Daily: validate latest S3 snapshot via 'raft snapshot inspect'
   nonprod/
     plan
     apply
@@ -77,6 +79,8 @@ vault-cluster/
     cluster-status
     backup-restore
     setup-backup-auth
+    setup-audit
+    validate-backup
     sync-to-nonprod-test    # Copy nonprod data to nonprod-test
     store-credentials       # Save root token + keys to Secrets Manager
   prod/
@@ -88,6 +92,8 @@ vault-cluster/
     cluster-status
     backup-restore
     setup-backup-auth
+    setup-audit
+    validate-backup
     store-credentials
   migration/
     migrate-nonprod         # Full migration pipeline for nonprod
@@ -189,7 +195,17 @@ Parameters: `ACTION` (list/backup/restore), `S3_KEY` (for restore)
 
 #### setup-backup-auth
 
-One-time job per environment. Configures Vault's AWS IAM auth method and creates the backup policy so the automated systemd timer can authenticate.
+One-time job per environment. Configures Vault's AWS IAM auth method and creates the backup policy so the automated systemd timer can authenticate. Policy includes `sys/storage/raft/snapshot` (read, for snapshot) and `sys/storage/raft/configuration` (read, for the backup script's Raft-consensus leader check).
+
+#### setup-audit
+
+One-time job per environment (idempotent — safe to re-run). Enables Vault's file audit device at `/var/log/vault/audit.log`. Splunk picks up the file automatically via its `/var/log` scan. Logrotate config is pre-baked in userdata.
+
+> **Important:** once enabled, Vault blocks all requests if the audit destination becomes unwritable. See [operations.md §Audit Logging](operations.md#audit-logging) for details.
+
+#### validate-backup
+
+Daily-scheduled (07:15 UTC) validation of the latest daily snapshot in S3. Downloads via `aws s3 cp`, runs `vault operator raft snapshot inspect` locally (no Vault connection needed), asserts pass/fail, emits CloudWatch metrics. See [backups.md §Daily Validation](backups.md#daily-validation).
 
 Run this **after initial cluster setup** and **before the first automated backup**.
 
@@ -236,6 +252,7 @@ Interactive pipeline for regenerating recovery keys. Note: this is not fully aut
 5. vault-cluster/<env>/launch-node    # AZ_INDEX=1
 6. vault-cluster/<env>/launch-node    # AZ_INDEX=2
 7. vault-cluster/<env>/setup-backup-auth
+8. vault-cluster/<env>/setup-audit
 8. vault-cluster/<env>/cluster-status
 ```
 
@@ -267,6 +284,7 @@ Interactive pipeline for regenerating recovery keys. Note: this is not fully aut
 1. vault-cluster/migration/migrate-nonprod   (or migrate-prod)
 2. vault-cluster/<env>/store-credentials     (enter the new credentials from step 1 output)
 3. vault-cluster/<env>/setup-backup-auth
+4. vault-cluster/<env>/setup-audit
 4. (update DNS manually)
 5. vault-cluster/<env>/cluster-status
 ```

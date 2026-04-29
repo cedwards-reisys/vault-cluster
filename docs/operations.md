@@ -9,6 +9,7 @@ Complete guide to operating the Vault cluster across all environments: multi-env
 - [Restore from Backup](#restore-from-backup)
 - [Data Sync (nonprod to nonprod-test)](#data-sync-nonprod-to-nonprod-test)
 - [Credential Management](#credential-management)
+- [Audit Logging](#audit-logging)
 - [Recovery Key Regeneration](#recovery-key-regeneration)
 - [Migration from Legacy Clusters](#migration-from-legacy-clusters)
 - [Vault Version Upgrade Path](#vault-version-upgrade-path)
@@ -321,6 +322,71 @@ aws secretsmanager get-secret-value \
 Vault nodes have both `GetSecretValue` and `PutSecretValue` on these secrets, so automation scripts running on the nodes can update them. Operator access is via your normal AWS IAM credentials.
 
 ---
+
+## Audit Logging
+
+Vault's audit device writes an append-only log of every request and response
+to the API. This is the forensic/compliance backbone: the only way to answer
+"who read secret X at time Y?" after the fact. Sensitive values are HMAC'd
+before writing — the log shows *that* a secret was accessed, not its contents.
+
+### Where logs live
+
+File: `/var/log/vault/audit.log` on each node, rotated daily (or on 100M size
+threshold, whichever hits first) via `/etc/logrotate.d/vault-audit`. Rotated
+files are gzip-compressed after the next rotation (`delaycompress`) and 14
+rotated files are retained on disk.
+
+Because the log lives under `/var/log`, the existing Splunk forwarder picks
+it up automatically — no additional agent config needed.
+
+### One-time enable (per cluster)
+
+```bash
+# Via Jenkins:
+vault-cluster/<env>/setup-audit
+
+# Or manually:
+export VAULT_ADDR=https://vault.<env>.reisys.io
+export VAULT_TOKEN=<root-token>
+vault audit enable file file_path=/var/log/vault/audit.log log_raw=false
+```
+
+The `setup-audit.Jenkinsfile` pipeline is idempotent — re-running is safe.
+
+### Verification
+
+```bash
+# List enabled audit devices
+vault audit list
+
+# Tail the log on a specific node
+aws ssm start-session --target <instance-id>
+sudo tail -f /var/log/vault/audit.log
+
+# Inspect rotation state
+sudo ls -la /var/log/vault/
+sudo cat /var/lib/logrotate/logrotate.status | grep vault
+```
+
+### IMPORTANT operational caveats
+
+- **Audit-device failure = Vault unavailability.** If `/var/log/vault/audit.log`
+  becomes unwritable (permissions drift, root disk full, deleted by mistake),
+  Vault will refuse all requests. This is a security property, not a bug —
+  Vault must not silently drop audit entries. Monitor disk free on the node
+  root volume.
+- **No in-band rotation restart needed.** `copytruncate` keeps Vault's open
+  file descriptor valid across logrotate runs — no SIGHUP required.
+- **`log_raw=false`** — the default. HMACs sensitive fields. Set to `true`
+  only in short-lived debugging sessions with an isolated log destination;
+  `log_raw=true` writes plaintext secrets to the log.
+
+### Why file + logrotate (not syslog or socket)
+
+Splunk already tails `/var/log`. Adding a file device gives Splunk the audit
+log for free with no new moving parts. The `syslog` / `socket` devices would
+require additional forwarding config and add failure modes we don't need.
 
 ## Recovery Key Rotation
 

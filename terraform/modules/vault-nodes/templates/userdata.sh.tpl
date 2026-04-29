@@ -289,6 +289,45 @@ ExecStart=
 ExecStart=/usr/bin/vault server -config=/opt/vault/config/vault.hcl
 EOF
 
+# -----------------------------------------------------------------------------
+# Audit log directory + logrotate config
+# -----------------------------------------------------------------------------
+# The audit device is enabled one-time post-init via the setup-audit
+# pipeline. We pre-create the directory and logrotate config here so that
+# when 'vault audit enable file' runs later, the destination and rotation
+# are already in place.
+#
+# Location: /var/log/vault/audit.log — under /var/log so the existing Splunk
+# forwarder picks it up automatically (no additional agent config needed).
+# Splunk has the long-term copy; on-disk rotation just covers "forwarder was
+# down for a while" (14 rotated files × daily = ~2 weeks of fallback).
+#
+# IMPORTANT: if the audit device fails to write, Vault blocks ALL requests.
+# copytruncate preserves Vault's open file descriptor across rotation so no
+# SIGHUP is needed.
+mkdir -p /var/log/vault
+chown vault:vault /var/log/vault
+chmod 0750 /var/log/vault
+
+tee /etc/logrotate.d/vault-audit > /dev/null <<'LROT'
+/var/log/vault/audit.log
+{
+    daily
+    maxsize 100M
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    dateext
+    dateformat -%Y%m%d-%s-%N
+    create 0640 vault vault
+    su vault vault
+}
+LROT
+chmod 0644 /etc/logrotate.d/vault-audit
+
 # Enable and start Vault
 systemctl daemon-reload
 systemctl enable vault
