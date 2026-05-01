@@ -1,10 +1,62 @@
-# S3 bucket for Vault Raft snapshot backups
+# S3 bucket for Vault Raft snapshot backups.
+#
+# object_lock_enabled MUST be set at creation time — AWS does not allow
+# enabling it retroactively on an existing bucket. Existing buckets that
+# need protection must be recreated (or migrated via S3 Replication).
 resource "aws_s3_bucket" "backup" {
-  bucket = var.bucket_name
+  bucket              = var.bucket_name
+  object_lock_enabled = var.object_lock_enabled
 
   tags = merge(var.tags, {
     Name = var.bucket_name
   })
+}
+
+# Deny any request that isn't using TLS — blocks credential sniffing over
+# in-VPC or on-prem proxy paths that might strip TLS.
+data "aws_iam_policy_document" "backup_bucket_policy" {
+  statement {
+    sid    = "DenyInsecureTransport"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.backup.arn,
+      "${aws_s3_bucket.backup.arn}/*",
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "backup" {
+  bucket = aws_s3_bucket.backup.id
+  policy = data.aws_iam_policy_document.backup_bucket_policy.json
+}
+
+# Default Object Lock retention rule — applied to every uploaded object.
+# GOVERNANCE mode (not COMPLIANCE): privileged operators with the
+# s3:BypassGovernanceRetention permission can still delete if genuinely
+# necessary (e.g., legal hold removal, mistaken upload). COMPLIANCE mode
+# would be undeletable by anyone including root — generally too strict.
+resource "aws_s3_bucket_object_lock_configuration" "backup" {
+  count  = var.object_lock_enabled ? 1 : 0
+  bucket = aws_s3_bucket.backup.id
+
+  rule {
+    default_retention {
+      mode = "GOVERNANCE"
+      days = var.object_lock_retention_days
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.backup]
 }
 
 resource "aws_s3_bucket_versioning" "backup" {

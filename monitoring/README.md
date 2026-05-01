@@ -117,16 +117,33 @@ The `cluster` and `instance` variables auto-populate from Prometheus.
 | Runtime | Prometheus | Memory usage, GC pause rate, goroutines |
 | Auto-Unseal (KMS) | Prometheus | KMS encrypt/decrypt rate, operation latency |
 
-## Alerting Recommendations
+## Alerting Rules
 
-These metrics are good candidates for Prometheus alerting rules:
+Ready-to-deploy Prometheus alert rules live in
+[`alerts/vault-alerts.yml`](alerts/vault-alerts.yml). 16 rules across 6 groups:
 
-| Metric | Condition | Severity |
-|--------|-----------|----------|
-| `vault_core_unsealed` | `== 0` for any node for 2m | Critical |
-| `vault_core_active` | No node has `== 1` for 1m | Critical |
-| `vault_core_leadership_lost_count` | Increases > 2 in 10m | Warning |
-| `vault_audit_log_request_failure` | `> 0` for 5m | Critical |
-| `vault_raft_commitTime` | p99 > 500ms for 5m | Warning |
-| `vault_runtime_alloc_bytes` | > 80% of available memory | Warning |
-| `vault_expire_num_leases` | > 250,000 | Warning |
+| Group | Rules |
+|---|---|
+| vault-availability | VaultSealed, VaultNoLeader, VaultScrapeTargetDown, VaultQuorumDegraded |
+| vault-raft | VaultLeadershipChurn, VaultRaftCommitSlow, VaultRaftApplyLag |
+| vault-audit | VaultAuditLogFailures |
+| vault-backups | VaultBackupSkipped24h, VaultBackupNoSuccess8h, VaultBackupValidationFailed, VaultBackupSnapshotStale |
+| vault-storage | VaultRaftDiskFilling, VaultRaftDiskCritical, VaultAuditDiskFilling |
+| vault-tls | VaultCertExpiringSoon (optional — requires blackbox_exporter) |
+
+Load via Prometheus config:
+
+```yaml
+rule_files:
+  - /etc/prometheus/rules/vault-alerts.yml
+```
+
+Validate changes before shipping:
+
+```bash
+promtool check rules monitoring/alerts/vault-alerts.yml
+```
+
+Thresholds are starting points — tune based on observed baseline after a
+week of operation. Runbook links in the `annotations.runbook` field point
+at `docs/troubleshooting.md`, `docs/backups.md`, `docs/operations.md`.

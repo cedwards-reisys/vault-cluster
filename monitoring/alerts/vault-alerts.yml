@@ -1,0 +1,281 @@
+# Prometheus alerting rules for the Vault HA cluster.
+#
+# Drop into your Prometheus rule_files config:
+#   rule_files:
+#     - /etc/prometheus/rules/vault-alerts.yml
+#
+# All alerts target a 3-node / 3-AZ cluster. Adjust `expected_peers` math
+# if you change topology. Thresholds are starting points — tune based on
+# observed baseline after a week of operation.
+#
+# Label conventions:
+#   cluster_name, environment         — from Prometheus job/relabel
+#   severity                          — critical | warning | info
+#   runbook                           — link into docs/troubleshooting.md
+#
+# Metrics sources:
+#   vault_*                    — Vault /v1/sys/metrics?format=prometheus
+#   vault_backup_*             — custom CloudWatch metrics from backup-snapshot.sh (C4)
+#   vault_backup_validation_*  — custom CloudWatch metrics from validate-backup.sh (C5)
+#   node_*                     — node_exporter (if deployed)
+#   up{job="vault"}            — Prometheus scrape target liveness
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Cluster availability
+  # ---------------------------------------------------------------------------
+  - name: vault-availability
+    interval: 30s
+    rules:
+
+      - alert: VaultSealed
+        expr: vault_core_unsealed == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: vault
+        annotations:
+          summary: "Vault node {{ $labels.instance }} is sealed"
+          description: |
+            Vault node {{ $labels.instance }} has been sealed for >2m. KMS
+            auto-unseal should bring it back automatically; if it hasn't,
+            check the KMS key permissions and instance IAM role.
+          runbook: "docs/troubleshooting.md#common-failure-patterns"
+
+      - alert: VaultNoLeader
+        expr: max(vault_core_active) < 1
+        for: 1m
+        labels:
+          severity: critical
+          component: vault
+        annotations:
+          summary: "Vault cluster has no active leader"
+          description: |
+            No Vault node reports vault_core_active=1 for >1m. Cluster
+            cannot serve requests. Likely causes: quorum loss, election
+            storm, or all nodes sealed. Check cluster-status.sh.
+          runbook: "docs/troubleshooting.md"
+
+      - alert: VaultScrapeTargetDown
+        expr: up{job="vault"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: vault
+        annotations:
+          summary: "Cannot scrape Vault node {{ $labels.instance }}"
+          description: |
+            Prometheus has been unable to scrape Vault metrics from
+            {{ $labels.instance }} for >5m. Node may be down, the TLS cert
+            may have changed, or the metrics endpoint is unreachable.
+
+      - alert: VaultQuorumDegraded
+        expr: count(vault_core_unsealed == 1) < 2
+        for: 2m
+        labels:
+          severity: critical
+          component: vault
+        annotations:
+          summary: "Less than 2 Vault nodes unsealed — quorum at risk"
+          description: |
+            Fewer than 2 of 3 nodes are unsealed. One more node failure
+            will break Raft quorum and the cluster will go read-only.
+
+  # ---------------------------------------------------------------------------
+  # Raft health
+  # ---------------------------------------------------------------------------
+  - name: vault-raft
+    interval: 30s
+    rules:
+
+      - alert: VaultLeadershipChurn
+        expr: increase(vault_core_leadership_lost_count[10m]) > 2
+        labels:
+          severity: warning
+          component: vault
+        annotations:
+          summary: "Leader election churn on Vault cluster"
+          description: |
+            Vault has lost leadership more than 2 times in 10 minutes.
+            Indicates network flakiness, overloaded leader, or slow Raft
+            commit times.
+
+      - alert: VaultRaftCommitSlow
+        expr: histogram_quantile(0.99, rate(vault_raft_commitTime_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: vault
+        annotations:
+          summary: "Raft p99 commit time >500ms"
+          description: |
+            Raft is taking >500ms at p99 to commit writes. Usually indicates
+            slow EBS (check EBS latency) or network between AZs.
+
+      - alert: VaultRaftApplyLag
+        expr: vault_raft_leader_lastContact > 500
+        for: 2m
+        labels:
+          severity: warning
+          component: vault
+        annotations:
+          summary: "Follower {{ $labels.instance }} is behind leader"
+          description: |
+            Follower hasn't heard from the leader in >500ms. Either the
+            leader is degraded or this follower is partitioned.
+
+  # ---------------------------------------------------------------------------
+  # Audit device — if this fails, Vault blocks all requests (ADR-style)
+  # ---------------------------------------------------------------------------
+  - name: vault-audit
+    interval: 30s
+    rules:
+
+      - alert: VaultAuditLogFailures
+        expr: increase(vault_audit_log_request_failure[5m]) > 0
+        labels:
+          severity: critical
+          component: vault
+        annotations:
+          summary: "Vault audit device write failures on {{ $labels.instance }}"
+          description: |
+            Audit device is failing to write. When audit fails, Vault
+            BLOCKS ALL REQUESTS. Immediately check:
+              - /var/log/vault/audit.log writable?
+              - root disk full?
+              - logrotate bug?
+          runbook: "docs/operations.md#audit-logging"
+
+  # ---------------------------------------------------------------------------
+  # Backup & backup validation — CloudWatch metrics from our scripts
+  # ---------------------------------------------------------------------------
+  - name: vault-backups
+    interval: 60s
+    rules:
+
+      - alert: VaultBackupSkipped24h
+        expr: sum by (cluster) (increase(vault_backup_skipped_count[24h])) > 0
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "Vault backup was skipped in the last 24h"
+          description: |
+            backup-snapshot.sh reported BackupSkipped at least once in 24h.
+            Common cause: Raft consensus check failed (non-leader ran; or
+            peer_count != expected; or non-voter detected during promotion).
+            Review CloudWatch logs for the reason.
+          runbook: "docs/backups.md"
+
+      - alert: VaultBackupNoSuccess8h
+        expr: sum by (cluster) (increase(vault_backup_success_count[8h])) == 0
+        for: 30m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "No successful Vault backup in the last 8h"
+          description: |
+            Expected backup cadence is 6h. No BackupSuccess metric in 8h.
+            Backup timer may be broken, or every attempt is being skipped.
+            RPO is at risk.
+          runbook: "docs/backups.md"
+
+      - alert: VaultBackupValidationFailed
+        expr: sum by (cluster, environment) (increase(vault_backup_validation_failure_count[24h])) > 1
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "Backup validation failed {{ $value }}x in 24h"
+          description: |
+            The validate-backup.sh pipeline has failed more than once in
+            24h. Could mean snapshots are corrupted, bucket access broken,
+            or the validation window is too tight. Investigate before the
+            next real disaster.
+          runbook: "docs/backups.md#daily-validation"
+
+      - alert: VaultBackupSnapshotStale
+        expr: vault_backup_validation_age_hours > 12
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "Latest validated Vault snapshot is >12h old"
+          description: |
+            Expected cadence is 6h. Latest snapshot age is {{ $value }}h.
+            Backup timer may be degraded; investigate before the window
+            exceeds RPO commitments.
+
+  # ---------------------------------------------------------------------------
+  # Storage — EBS and root-volume fill protection
+  # ---------------------------------------------------------------------------
+  - name: vault-storage
+    interval: 60s
+    rules:
+
+      - alert: VaultRaftDiskFilling
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/opt/vault/data"}
+           / node_filesystem_size_bytes{mountpoint="/opt/vault/data"}) < 0.20
+        for: 10m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Raft data volume <20% free on {{ $labels.instance }}"
+          description: |
+            /opt/vault/data has <20% free space. Raft log + snapshots will
+            fail to write once full, taking the node down.
+
+      - alert: VaultRaftDiskCritical
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/opt/vault/data"}
+           / node_filesystem_size_bytes{mountpoint="/opt/vault/data"}) < 0.10
+        for: 2m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Raft data volume <10% free on {{ $labels.instance }}"
+          description: |
+            Imminent disk-full. Raft writes will fail. Investigate now.
+
+      - alert: VaultAuditDiskFilling
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"}
+           / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 10m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Root volume <15% free on {{ $labels.instance }}"
+          description: |
+            /var/log/vault/audit.log lives on root. If root fills, the audit
+            device will fail, which makes Vault BLOCK ALL REQUESTS. Free
+            disk now; review logrotate behavior.
+          runbook: "docs/operations.md#audit-logging"
+
+  # ---------------------------------------------------------------------------
+  # TLS — belt-and-suspenders for ADR-006 (monthly rolls keep certs fresh)
+  # ---------------------------------------------------------------------------
+  - name: vault-tls
+    interval: 5m
+    rules:
+
+      - alert: VaultCertExpiringSoon
+        # node_exporter doesn't know about Vault certs; this relies on a
+        # blackbox_exporter probe targeting https://<node>:8200. Remove
+        # this rule if you don't run blackbox_exporter.
+        expr: (probe_ssl_earliest_cert_expiry{job="vault-tls"} - time()) / 86400 < 30
+        for: 10m
+        labels:
+          severity: warning
+          component: tls
+        annotations:
+          summary: "Vault TLS cert expires in <30 days on {{ $labels.instance }}"
+          description: |
+            Node cert has <30d until expiry. Per ADR-006, monthly rolls
+            should refresh certs. If rolls have been paused for >180d,
+            schedule a rolling update to refresh all three node certs.

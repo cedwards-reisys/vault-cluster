@@ -670,6 +670,76 @@ vault token revoke -self
 
 ---
 
+## Destroying an EBS Volume
+
+EBS volumes for Vault Raft data are protected by Terraform's
+`lifecycle.prevent_destroy`. This is intentional (see ADR-008) — the
+volumes hold cluster state and losing one unintentionally is catastrophic.
+
+When destruction is legitimately needed (environment teardown, AZ
+retirement, known-corrupt volume, migration to new instance types):
+
+### Step 1 — confirm intent
+
+Destroying an EBS volume is irreversible. Verify:
+- You have a recent S3 snapshot if you might want this data back
+- The cluster can survive the loss (two other AZs healthy, or you're
+  doing a full teardown)
+- No operator is mid-flight on a rolling update
+
+### Step 2 — remove the volume from Terraform state
+
+```bash
+./scripts/env.sh <env> state list | grep aws_ebs_volume
+# module.vault-nodes.aws_ebs_volume.vault_data[0]
+# module.vault-nodes.aws_ebs_volume.vault_data[1]
+# module.vault-nodes.aws_ebs_volume.vault_data[2]
+
+# Remove ONE (replace N with the AZ index):
+./scripts/env.sh <env> state rm 'module.vault-nodes.aws_ebs_volume.vault_data[N]'
+```
+
+This tells Terraform to stop managing the volume — but the volume itself
+still exists in AWS. `prevent_destroy` only fires on resources in state.
+
+### Step 3 — delete the volume in AWS
+
+```bash
+# Find the volume
+aws ec2 describe-volumes --region <region> \
+    --filters "Name=tag:vault-cluster,Values=vault-<env>" \
+              "Name=tag:vault-az,Values=<az>" \
+    --query 'Volumes[].[VolumeId,State]' --output table
+
+# Detach if attached (should not be if all nodes were terminated first)
+aws ec2 detach-volume --volume-id vol-xxx --region <region>
+
+# Delete
+aws ec2 delete-volume --volume-id vol-xxx --region <region>
+```
+
+### Step 4 — recreate via Terraform (for partial destroys)
+
+If you're replacing the volume (not full teardown), the next
+`./scripts/env.sh <env> apply` will create a fresh replacement volume.
+Userdata treats it as a new volume:
+- Formats with xfs on first mount
+- Writes a fresh `.vault-node-id` sentinel
+- Starts fresh Raft state; the new node joins via auto-join and replicates
+  from the current leader
+
+For a full environment teardown, skip step 4 — just run
+`./scripts/env.sh <env> destroy` after all volumes are removed from state.
+
+### Why not a `prevent_destroy` variable?
+
+Terraform does not allow `lifecycle.prevent_destroy` to be a variable, by
+design. It's a compile-time safety fence, not a runtime toggle. The
+state-rm pattern above is HashiCorp's recommended way to intentionally
+destroy a protected resource. A variable would defeat the fence.
+
+---
+
 ## Quick Reference
 
 ### Common Commands

@@ -90,6 +90,45 @@ check_prerequisites() {
     log_info "All prerequisites met"
 }
 
+# Preflight: prove the current VAULT_TOKEN has the permissions rolling-update
+# needs BEFORE any destructive operation happens. Fails fast — not mid-update
+# after a node has already been terminated.
+#
+# Requires:
+#   - read  sys/storage/raft/configuration   (list-peers + canary diff)
+#   - sudo  sys/step-down                     (leader step-down)
+#   - update sys/storage/raft/remove-peer    (only if --remove-from-raft is ever used downstream;
+#                                             not currently invoked by rolling-update itself)
+preflight_token() {
+    log_info "Verifying VAULT_TOKEN permissions..."
+
+    # Token lookup — validates the token is real and unexpired.
+    if ! vault token lookup >/dev/null 2>&1; then
+        log_error "VAULT_TOKEN is invalid or expired"
+        exit 1
+    fi
+
+    # raft list-peers — exercises sys/storage/raft/configuration read.
+    if ! vault operator raft list-peers -format=json >/dev/null 2>&1; then
+        log_error "VAULT_TOKEN cannot read Raft configuration"
+        log_error "Required policy: path \"sys/storage/raft/configuration\" { capabilities = [\"read\"] }"
+        exit 1
+    fi
+
+    # We can't call step-down without actually stepping down, so we use token
+    # capabilities to confirm the sudo'd path is grantable.
+    local caps
+    caps=$(vault token capabilities "sys/step-down" 2>/dev/null || echo "")
+    if ! echo "$caps" | grep -qE '(^|,)sudo(,|$)|update'; then
+        log_error "VAULT_TOKEN lacks capability 'sudo' (or 'update') on sys/step-down"
+        log_error "Required policy: path \"sys/step-down\" { capabilities = [\"sudo\",\"update\"] }"
+        log_error "Token has: ${caps:-(none)}"
+        exit 1
+    fi
+
+    log_info "VAULT_TOKEN preflight passed"
+}
+
 # Get config from SSM and AWS API
 get_config() {
     log_info "Getting cluster config for $CLUSTER_NAME..."
@@ -326,18 +365,23 @@ step_down_leader() {
     log_info "Requesting leader step-down..."
     vault operator step-down
 
-    local max_wait=60
+    # Timeout is env-tunable because 60s is too tight for slow elections on
+    # loaded clusters — observed 90-120s in practice. Default 180s is safe
+    # for typical 3-node clusters and still fast enough to fail visibly.
+    local max_wait="${STEP_DOWN_TIMEOUT:-180}"
     local wait_interval=5
     local elapsed=0
+    local new_leader=""
 
-    log_info "Waiting for new leader election..."
+    log_info "Waiting for new leader election (timeout ${max_wait}s)..."
     while [ $elapsed -lt $max_wait ]; do
         sleep $wait_interval
         elapsed=$((elapsed + wait_interval))
 
-        local new_leader
         new_leader=$(vault operator raft list-peers -format=json 2>/dev/null \
-            | jq -r '.data.config.servers[] | select(.leader == true) | .node_id' || true)
+            | jq -r '.data.config.servers[]? | select(.leader == true) | .node_id' 2>/dev/null \
+            || echo "")
+        new_leader=$(echo "$new_leader" | head -1 | tr -d '[:space:]')
 
         if [ -n "$new_leader" ]; then
             log_info "New leader elected: $new_leader"
@@ -347,7 +391,15 @@ step_down_leader() {
         log_info "No leader yet (${elapsed}s/${max_wait}s)..."
     done
 
-    log_error "Timed out waiting for new leader election"
+    # Failure path — be explicit about the cluster state so the operator
+    # knows what they're dealing with.
+    log_error "Timed out waiting for new leader election after ${max_wait}s"
+    log_error "CLUSTER STATE: the previous leader stepped down but no new leader"
+    log_error "  was elected within the timeout. The cluster may be:"
+    log_error "    (a) still electing — check 'vault operator raft list-peers' manually"
+    log_error "        and re-run with STEP_DOWN_TIMEOUT=300 if election is progressing"
+    log_error "    (b) stuck — run ./scripts/cluster-status.sh <env> to diagnose"
+    log_error "  DO NOT terminate any nodes until a leader is elected."
     return 1
 }
 
@@ -477,6 +529,7 @@ main() {
 
     # Pre-flight health check
     log_step "Step 1: Pre-flight checks"
+    preflight_token
     if ! check_cluster_health; then
         log_error "Cluster is not healthy - aborting"
         exit 1

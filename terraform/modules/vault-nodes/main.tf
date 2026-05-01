@@ -19,8 +19,28 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# Persistent EBS volumes for Vault Raft data - one per AZ
-# These volumes persist across instance replacements
+# Persistent EBS volumes for Vault Raft data — one per AZ.
+# These volumes persist across instance replacements (see ADR-008).
+#
+# lifecycle.prevent_destroy is intentionally hardcoded to true. Terraform
+# does not allow prevent_destroy to be a variable, by design — it's a
+# safety fence, not a runtime toggle.
+#
+# LEGITIMATE DESTROY PROCEDURE (when an operator really must destroy a
+# volume, e.g., full environment teardown, AZ retirement, corruption):
+#
+#   1. Confirm you actually want to lose the data. This volume holds Raft
+#      state — destroying it is irreversible without a snapshot restore.
+#   2. Remove it from Terraform state (tells TF to stop managing it):
+#        tofu state rm 'module.vault-nodes.aws_ebs_volume.vault_data[N]'
+#      where N is the AZ index (0, 1, 2).
+#   3. Delete the volume via AWS CLI or console:
+#        aws ec2 delete-volume --volume-id vol-xxx --region <region>
+#   4. Next `tofu apply` will create a fresh replacement (which userdata
+#      will treat as an empty volume — writes a fresh sentinel, starts
+#      fresh Raft state on first mount).
+#
+# See docs/operations.md §Destroying an EBS Volume for the full runbook.
 resource "aws_ebs_volume" "vault_data" {
   count = length(var.private_subnet_ids)
 
