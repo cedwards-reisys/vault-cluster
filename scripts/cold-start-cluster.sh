@@ -2,6 +2,29 @@
 #
 # cold-start-cluster.sh - Bring a Vault cluster back from zero running nodes
 #
+# SCOPE — read before running:
+#   This script is a DELIBERATE RESET tool. It is NOT a data-preservation
+#   recovery tool. It exists primarily for nonprod-test teardown/reset and
+#   development iteration — scenarios where you want the cluster back on
+#   its feet and do not care about writes that may have been in flight.
+#
+#   By design, non-leader nodes have their Raft data wiped so they rejoin
+#   cleanly as fresh peers replicating from the recovered leader. Any writes
+#   that were committed only on those non-leader nodes (never replicated to
+#   node 0) are lost. This matches the battle-tested pattern documented in
+#   the hashicorp/raft library's RecoverCluster godoc:
+#     "join other new clean-state peer servers using the standard APIs"
+#
+#   If you need to recover a damaged PRODUCTION cluster while preserving
+#   data:
+#     → restore from an S3 snapshot via the break-glass runbook
+#       (docs/dr-lost-recovery-keys.md — Scenario 1 "Execute rebuild")
+#     → NOT this script
+#
+#   Running this against prod loses any writes newer than the most recent
+#   S3 snapshot. That is the intended behavior, not a bug. If that's
+#   unacceptable, stop and use the break-glass runbook instead.
+#
 # When to use:
 #   All Vault nodes were terminated (intentionally or otherwise). The persistent
 #   EBS volumes still contain Raft data from the previous cluster, so new nodes
@@ -14,7 +37,8 @@
 #   3. Detects the stuck state (unsealed, no leader, no quorum)
 #   4. Writes a single-node peers.json to force leader bootstrap
 #   5. Restarts Vault — node 0 becomes the sole leader
-#   6. Launches remaining nodes (1, 2) which rejoin via auto_join
+#   6. Launches remaining nodes (1, 2) with Raft data wiped so they rejoin
+#      as fresh peers via auto_join
 #   7. Verifies full cluster health
 #
 # Usage: ./cold-start-cluster.sh <env> [--yes] [--node-0-only]

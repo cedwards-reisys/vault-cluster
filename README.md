@@ -450,6 +450,7 @@ rolling updates, EBS sentinel mismatches, stale Raft state — see
 | [docs/migration.md](docs/migration.md) | Fresh-deploy + snapshot-restore migration from legacy Vault clusters |
 | [docs/dr-lost-recovery-keys.md](docs/dr-lost-recovery-keys.md) | Break-glass DR: lost recovery keys, lost root token, both lost |
 | [docs/jenkins.md](docs/jenkins.md) | Jenkins pipeline catalog and cross-account auth |
+| [docs/architecture-decisions.md](docs/architecture-decisions.md) | Signed-off design decisions (ADRs). Check here before disputing an architectural pattern. |
 | [docs/review-findings.md](docs/review-findings.md) | Tracker for the multi-agent review (2026-04-29) — open/done/wontfix findings and deferred work |
 
 ## Cost Optimization

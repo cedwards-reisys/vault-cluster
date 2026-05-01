@@ -1,0 +1,45 @@
+# Terraform / OpenTofu
+**/.terraform/
+**/.terraform.lock.hcl
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/tfplan
+**/crash.log
+**/crash.*.log
+
+# Override / local-only tfvars the operator may create
+terraform/environments/*.local.tfvars
+terraform/*.auto.tfvars
+terraform/*.auto.tfvars.json
+
+# Secrets / credentials that should never land in a commit
+*.pem
+*.key
+*.crt
+!terraform/**/*.crt.example
+!**/testdata/*.crt
+*.snap
+vault-*.snap
+credentials.json
+
+# Operating-system cruft
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python / scratch / ad-hoc tooling
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Output / logs
+*.log
+!**/CHANGELOG.md
