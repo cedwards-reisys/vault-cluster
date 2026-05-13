@@ -220,7 +220,7 @@ build_tag_spec_file() {
     tag_spec_file=$(mktemp)
 
     jq -n \
-        --arg name "${CLUSTER_NAME}-vault-${AVAILABILITY_ZONE}" \
+        --arg name "${CLUSTER_NAME}-node-${AVAILABILITY_ZONE}" \
         --arg cluster "$CLUSTER_NAME" \
         --arg az "$AVAILABILITY_ZONE" \
         --argjson extra "$INSTANCE_TAGS_JSON" \

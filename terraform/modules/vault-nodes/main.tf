@@ -52,7 +52,7 @@ resource "aws_ebs_volume" "vault_data" {
   encrypted         = true
 
   tags = merge(var.tags, {
-    Name            = "${var.cluster_name}-vault-data-${var.availability_zones[count.index]}"
+    Name            = "${var.cluster_name}-data-${var.availability_zones[count.index]}"
     "vault-cluster" = var.cluster_name
     "vault-az"      = var.availability_zones[count.index]
     "vault-role"    = "raft-data"
