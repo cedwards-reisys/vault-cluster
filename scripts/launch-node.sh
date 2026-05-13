@@ -148,6 +148,27 @@ get_config() {
     fi
 }
 
+# Compress userdata with gzip — cloud-init decompresses transparently at boot.
+# Saves ~2.6x vs plain bash, keeping us well under the AWS 16 KiB cap. The
+# plain file stays on disk under generated/ for debugging/inspection; only
+# the wire format is compressed.
+prepare_userdata() {
+    USERDATA_GZ_FILE="$(mktemp -t vault-userdata.XXXXXX.gz)"
+    trap 'rm -f "$USERDATA_GZ_FILE"' EXIT
+    gzip -9 -c "$USERDATA_FILE" > "$USERDATA_GZ_FILE"
+
+    local raw gz limit=16384
+    raw=$(wc -c < "$USERDATA_FILE" | tr -d ' ')
+    gz=$(wc -c < "$USERDATA_GZ_FILE" | tr -d ' ')
+    log_info "Userdata: ${raw} bytes raw → ${gz} bytes gzipped ($((gz * 100 / limit))% of ${limit} limit)"
+
+    if [ "$gz" -ge "$limit" ]; then
+        log_error "Gzipped userdata (${gz} bytes) still exceeds AWS limit (${limit} bytes)"
+        log_error "The template has grown too large even compressed. See ADR-010 for next steps."
+        exit 1
+    fi
+}
+
 # Check if there's already a running instance for this AZ
 check_existing_instance() {
     log_info "Checking for existing instance in $AVAILABILITY_ZONE..."
@@ -232,7 +253,7 @@ launch_instance() {
         --subnet-id "$SUBNET_ID" \
         --security-group-ids "${SECURITY_GROUP_IDS[@]}" \
         --iam-instance-profile "Name=$IAM_INSTANCE_PROFILE" \
-        --user-data "file://$USERDATA_FILE" \
+        --user-data "fileb://$USERDATA_GZ_FILE" \
         --metadata-options "HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=1,InstanceMetadataTags=enabled" \
         --tag-specifications "file://$tag_spec_file" \
         --query 'Instances[0].InstanceId' \
@@ -377,6 +398,7 @@ main() {
     fi
 
     echo ""
+    prepare_userdata
     launch_instance
     wait_for_instance
     attach_ebs_volume

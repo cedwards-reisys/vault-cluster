@@ -10,74 +10,11 @@ KMS_KEY_ID="${kms_key_id}"
 CA_CERT_SECRET_ARN="${ca_cert_secret_arn}"
 CA_KEY_SECRET_ARN="${ca_key_secret_arn}"
 
-# EBS data volume — device path is resolved at runtime to handle both
-# xen-based instance types (/dev/xvdf) and NVMe-native types (/dev/nvme1n1
-# on m6/m7/m8g.large+, r8g, c7i, etc.).
-#
-# Resolution order:
-#   1. If /dev/xvdf exists (xen) → use it.
-#   2. Else enumerate /dev/nvme*n1, skip the root-mounted one, pick the
-#      remaining data volume. When the AWS `ebsnvme-id` helper is
-#      available (shipped in AL2023), it is consulted as a tiebreaker.
-#
-# Sets DATA_DEVICE as a side effect. Exits non-zero if nothing resolves.
+# EBS data volume device. m8g.medium presents as /dev/xvdf.
+# If you change to NVMe-native instance types (m6i, r8g, c7i, etc.),
+# update this to /dev/nvme1n1.
+DATA_DEVICE="/dev/xvdf"
 DATA_MOUNT="/opt/vault/data"
-DATA_DEVICE=""
-
-resolve_data_device() {
-    # Xen path — fast exit for backward compatibility.
-    if [ -b "/dev/xvdf" ]; then
-        DATA_DEVICE="/dev/xvdf"
-        echo "Data device: $DATA_DEVICE (xen path)"
-        return 0
-    fi
-
-    # NVMe path — find root's physical device so we can exclude it, then
-    # pick the first remaining nvme*n1.
-    local rootsrc rootdev
-    rootsrc=$(findmnt -n -o SOURCE / 2>/dev/null || echo "")
-    # Strip partition suffix (nvme0n1p1 → nvme0n1)
-    rootdev="$${rootsrc%p[0-9]*}"
-
-    local candidates=()
-    for dev in /dev/nvme*n1; do
-        [ -b "$dev" ] || continue
-        [ "$dev" = "$rootdev" ] && continue
-        candidates+=("$dev")
-    done
-
-    if [ "$${#candidates[@]}" -eq 0 ]; then
-        return 1
-    fi
-
-    # If more than one non-root NVMe is attached, prefer one whose Volume
-    # ID is known (via ebsnvme-id). That lets users of this userdata
-    # extend with additional volumes later without breaking.
-    if [ "$${#candidates[@]}" -eq 1 ]; then
-        DATA_DEVICE="$${candidates[0]}"
-        echo "Data device: $DATA_DEVICE (NVMe, single non-root)"
-        return 0
-    fi
-
-    if command -v ebsnvme-id >/dev/null 2>&1; then
-        for dev in "$${candidates[@]}"; do
-            local volid
-            volid=$(ebsnvme-id "$dev" 2>/dev/null | awk '/Volume ID/{print $NF}' || true)
-            if [ -n "$volid" ]; then
-                DATA_DEVICE="$dev"
-                echo "Data device: $DATA_DEVICE (NVMe, volid=$volid)"
-                return 0
-            fi
-        done
-    fi
-
-    # Multiple non-root NVMe and no ebsnvme-id to disambiguate — fall back
-    # to the first candidate with a loud log so operators can notice.
-    DATA_DEVICE="$${candidates[0]}"
-    echo "WARN: Multiple non-root NVMe volumes and ebsnvme-id unavailable;"
-    echo "WARN: falling back to first candidate: $DATA_DEVICE"
-    return 0
-}
 
 # Logging
 exec > >(tee /var/log/vault-setup.log | logger -t vault-setup -s 2>/dev/console) 2>&1
