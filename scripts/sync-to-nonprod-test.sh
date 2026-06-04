@@ -6,11 +6,8 @@
 #
 # Usage: ./scripts/sync-to-nonprod-test.sh [--yes]
 #
-# Requires:
-#   VAULT_NONPROD_ADDR    - nonprod Vault address
-#   VAULT_NONPROD_TOKEN   - nonprod root/operator token
-#   VAULT_TEST_ADDR       - nonprod-test Vault address
-#   VAULT_TEST_TOKEN      - nonprod-test root/operator token
+# Uses VAULT_*_ADDR / VAULT_*_TOKEN if set; otherwise loads Vault addresses
+# from SSM and root tokens from Secrets Manager.
 
 set -euo pipefail
 
@@ -33,19 +30,47 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Validate prerequisites
 command -v vault >/dev/null 2>&1 || { log_error "vault CLI not found"; exit 1; }
 command -v aws >/dev/null 2>&1 || { log_error "aws CLI not found"; exit 1; }
+command -v jq >/dev/null 2>&1 || { log_error "jq not found"; exit 1; }
 
-for var in VAULT_NONPROD_ADDR VAULT_NONPROD_TOKEN VAULT_TEST_ADDR VAULT_TEST_TOKEN; do
-    if [ -z "${!var:-}" ]; then
-        log_error "$var not set"
-        echo ""
-        echo "Required environment variables:"
-        echo "  VAULT_NONPROD_ADDR    - nonprod Vault address"
-        echo "  VAULT_NONPROD_TOKEN   - nonprod root/operator token"
-        echo "  VAULT_TEST_ADDR       - nonprod-test Vault address"
-        echo "  VAULT_TEST_TOKEN      - nonprod-test root/operator token"
-        exit 1
+# shellcheck source=scripts/resolve-env.sh
+source "$SCRIPT_DIR/resolve-env.sh" nonprod
+
+resolve_missing_addr() {
+    local var_name="$1"
+    local cluster_name="$2"
+    local value
+
+    if [ -n "${!var_name:-}" ]; then
+        return 0
     fi
-done
+
+    value=$(ssm_get_for_cluster "$cluster_name" vault-url) || {
+        log_error "Unable to read Vault address from SSM for $cluster_name"
+        exit 1
+    }
+    printf -v "$var_name" '%s' "$value"
+}
+
+resolve_missing_token() {
+    local var_name="$1"
+    local cluster_name="$2"
+    local value
+
+    if [ -n "${!var_name:-}" ]; then
+        return 0
+    fi
+
+    value=$(get_vault_token_for_cluster "$cluster_name") || {
+        log_error "Unable to read Vault root token from Secrets Manager for $cluster_name"
+        exit 1
+    }
+    printf -v "$var_name" '%s' "$value"
+}
+
+resolve_missing_addr VAULT_NONPROD_ADDR vault-nonprod
+resolve_missing_addr VAULT_TEST_ADDR vault-nonprod-test
+resolve_missing_token VAULT_NONPROD_TOKEN vault-nonprod
+resolve_missing_token VAULT_TEST_TOKEN vault-nonprod-test
 
 echo "=================================="
 echo "  Sync nonprod -> nonprod-test"
@@ -63,7 +88,7 @@ log_info "Taking snapshot from nonprod..."
 VAULT_ADDR="$VAULT_NONPROD_ADDR" VAULT_TOKEN="$VAULT_NONPROD_TOKEN" \
     vault operator raft snapshot save "$SNAP_FILE"
 
-SNAP_SIZE=$(ls -lh "$SNAP_FILE" | awk '{print $5}')
+SNAP_SIZE=$(du -h "$SNAP_FILE" | awk '{print $1}')
 log_info "Snapshot saved: $SNAP_FILE ($SNAP_SIZE)"
 
 # Optionally upload to nonprod-test backup bucket for audit trail
@@ -83,7 +108,7 @@ if [ "$AUTO_CONFIRM" != "true" ]; then
     log_warn "This will REPLACE all data in nonprod-test with nonprod data."
     log_warn "nonprod-test's existing data will be lost."
     echo ""
-    read -p "Continue? (yes/no): " confirm
+    read -r -p "Continue? (yes/no): " confirm
     if [ "$confirm" != "yes" ]; then
         log_info "Aborted"
         rm -f "$SNAP_FILE"

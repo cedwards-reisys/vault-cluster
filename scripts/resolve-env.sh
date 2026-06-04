@@ -3,7 +3,8 @@
 # resolve-env.sh — shared helper sourced by operational scripts
 #
 # Sets: VAULT_ENV, CLUSTER_NAME, AWS_REGION
-# Provides: ssm_get, cfg_get, lookup_ebs_volumes, lookup_network_interfaces
+# Provides: ssm_get_for_cluster, ssm_get, cfg_get, get_vault_token_for_cluster,
+# load_vault_token, lookup_ebs_volumes, lookup_network_interfaces
 #
 # Usage (from calling script):
 #   source "$(dirname "${BASH_SOURCE[0]}")/resolve-env.sh" "$env"
@@ -41,13 +42,18 @@ else
 fi
 export AWS_REGION
 
-# Fetch a single SSM parameter by short name (e.g. "vault-url")
-ssm_get() {
+# Fetch a single SSM parameter by cluster and short name (e.g. "vault-url")
+ssm_get_for_cluster() {
     aws ssm get-parameter \
         --region "$AWS_REGION" \
-        --name "/${CLUSTER_NAME}/config/${1}" \
+        --name "/${1}/config/${2}" \
         --query 'Parameter.Value' \
         --output text
+}
+
+# Fetch a single SSM parameter for the current cluster by short name.
+ssm_get() {
+    ssm_get_for_cluster "$CLUSTER_NAME" "$1"
 }
 
 # Cached vault-config JSON (fetched on first cfg_get call)
@@ -60,6 +66,46 @@ cfg_get() {
         _VAULT_CONFIG_JSON=$(ssm_get vault-config)
     fi
     echo "$_VAULT_CONFIG_JSON" | jq -r ".${1}"
+}
+
+# Read the cluster root token from Secrets Manager.
+get_vault_token_for_cluster() {
+    command -v jq >/dev/null 2>&1 || {
+        echo "ERROR: jq not found (required to parse Vault root token secret)." >&2
+        return 1
+    }
+
+    local secret_id token_json token
+    secret_id="${1}/vault/root-token"
+
+    token_json=$(aws secretsmanager get-secret-value \
+        --region "$AWS_REGION" \
+        --secret-id "$secret_id" \
+        --query SecretString \
+        --output text 2>/dev/null) || {
+        echo "ERROR: Unable to read Vault root token from Secrets Manager: $secret_id" >&2
+        return 1
+    }
+
+    token=$(echo "$token_json" | jq -r '.token // empty')
+    if [ -z "$token" ]; then
+        echo "ERROR: Secret $secret_id does not contain a .token value." >&2
+        return 1
+    fi
+
+    echo "$token"
+}
+
+# Load the cluster root token from Secrets Manager unless VAULT_TOKEN is
+# already set. The token is exported for Vault CLI and curl calls.
+load_vault_token() {
+    if [ -n "${VAULT_TOKEN:-}" ]; then
+        return 0
+    fi
+
+    local token
+    token=$(get_vault_token_for_cluster "$CLUSTER_NAME") || return 1
+    export VAULT_TOKEN="$token"
 }
 
 # Look up EBS volumes by cluster tag

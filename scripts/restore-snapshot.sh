@@ -5,7 +5,8 @@
 # Usage: ./scripts/restore-snapshot.sh <environment> [s3-key]
 #   If no s3-key provided, lists recent snapshots for interactive selection.
 #
-# Requires: VAULT_ADDR, VAULT_TOKEN
+# Uses VAULT_ADDR / VAULT_TOKEN if set; otherwise loads them from SSM and
+# Secrets Manager for the selected environment.
 #
 # Examples:
 #   ./scripts/restore-snapshot.sh nonprod-test
@@ -38,17 +39,22 @@ fi
 ENV="$1"
 S3_KEY="${2:-}"
 
+# Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
+source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
+
 # Validate prerequisites
 command -v aws >/dev/null 2>&1 || { log_error "aws CLI not found"; exit 1; }
 command -v vault >/dev/null 2>&1 || { log_error "vault CLI not found"; exit 1; }
+command -v jq >/dev/null 2>&1 || { log_error "jq not found"; exit 1; }
 
 if [ -z "${VAULT_ADDR:-}" ]; then
-    log_error "VAULT_ADDR not set"
-    exit 1
+    VAULT_ADDR=$(ssm_get vault-url)
 fi
+export VAULT_ADDR
 
-if [ -z "${VAULT_TOKEN:-}" ]; then
-    log_error "VAULT_TOKEN not set"
+if ! load_vault_token; then
+    log_error "Vault token required for snapshot restore"
     exit 1
 fi
 
@@ -98,7 +104,7 @@ if [ -z "$S3_KEY" ]; then
         | sort -r | head -5 || echo "  (none found)"
 
     echo ""
-    read -p "Enter S3 key to restore (e.g., ${CLUSTER_NAME}/daily/vault-snapshot-YYYYMMDD-HHMMSS.snap): " S3_KEY
+    read -r -p "Enter S3 key to restore (e.g., ${CLUSTER_NAME}/daily/vault-snapshot-YYYYMMDD-HHMMSS.snap): " S3_KEY
 
     if [ -z "$S3_KEY" ]; then
         log_error "No key provided"
@@ -111,7 +117,7 @@ TEMP_FILE="/tmp/vault-restore-$(date +%s).snap"
 log_info "Downloading s3://${BACKUP_S3_BUCKET}/${S3_KEY}..."
 aws s3 cp "s3://${BACKUP_S3_BUCKET}/${S3_KEY}" "$TEMP_FILE"
 
-SNAP_SIZE=$(ls -lh "$TEMP_FILE" | awk '{print $5}')
+SNAP_SIZE=$(du -h "$TEMP_FILE" | awk '{print $1}')
 log_info "Downloaded snapshot: $SNAP_SIZE"
 echo ""
 
@@ -124,7 +130,7 @@ echo "  Source:  s3://${BACKUP_S3_BUCKET}/${S3_KEY}"
 echo "  Target:  $VAULT_ADDR"
 echo "  Size:    $SNAP_SIZE"
 echo ""
-read -p "Type RESTORE to confirm: " confirm
+read -r -p "Type RESTORE to confirm: " confirm
 
 if [ "$confirm" != "RESTORE" ]; then
     log_info "Aborted"

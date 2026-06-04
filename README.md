@@ -152,8 +152,7 @@ vault operator init -recovery-shares=5 -recovery-threshold=3
 
 ```bash
 # Check health
-export VAULT_TOKEN="<root-token>"
-./scripts/cluster-status.sh
+./scripts/cluster-status.sh nonprod-test
 
 # Check Raft peers
 vault operator raft list-peers
@@ -206,7 +205,7 @@ vault-cluster/
 │           ├── templates/
 │           │   └── userdata.sh.tpl  # Node bootstrap script (includes backup timer)
 │           └── generated/
-│               └── userdata.sh  # Generated userdata (gitignored)
+│               └── <cluster>-userdata.sh  # Generated userdata (gitignored)
 ├── scripts/
 │   ├── env.sh                   # Environment wrapper for tofu commands
 │   ├── launch-node.sh           # Launch a node in specific AZ
@@ -304,8 +303,7 @@ See [docs/rolling-updates.md](docs/rolling-updates.md) for the full runbook, inc
 
 ```bash
 # Update vault_version in terraform/environments/nonprod-test.tfvars, then:
-VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh nonprod-test
+./scripts/rolling-update.sh nonprod-test
 ```
 
 After each node replacement, the script runs a canary against the new instance
@@ -492,8 +490,6 @@ docker-compose run --rm vault-ops
 ./scripts/docker-run.sh tofu plan
 
 # Rolling update
-export VAULT_ADDR="https://vault.example.com"
-export VAULT_TOKEN="<token>"
 ./scripts/docker-run.sh ./scripts/rolling-update.sh nonprod-test
 ```
 

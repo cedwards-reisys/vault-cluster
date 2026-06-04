@@ -97,5 +97,5 @@ resource "local_file" "userdata_template" {
     backup_enabled     = var.backup_enabled
     backup_s3_bucket   = var.backup_s3_bucket
   })
-  filename = "${path.module}/generated/userdata.sh"
+  filename = "${path.module}/generated/${var.cluster_name}-userdata.sh"
 }

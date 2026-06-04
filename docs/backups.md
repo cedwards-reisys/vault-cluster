@@ -179,9 +179,6 @@ aws s3 cp vault-backup-*.snap s3://vault-nonprod-backups/vault-nonprod/daily/
 Restores a snapshot to the same cluster it came from.
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.example.io"
-export VAULT_TOKEN="<root-token>"
-
 # Interactive — lists available snapshots and prompts for selection
 ./scripts/restore-snapshot.sh nonprod
 
@@ -202,11 +199,6 @@ The script will:
 Use the dedicated sync script for nonprod → nonprod-test:
 
 ```bash
-export VAULT_NONPROD_ADDR="https://vault.nonprod.example.io"
-export VAULT_NONPROD_TOKEN="<nonprod-root-token>"
-export VAULT_TEST_ADDR="https://vault.nonprod-test.example.io"
-export VAULT_TEST_TOKEN="<nonprod-test-root-token>"
-
 ./scripts/sync-to-nonprod-test.sh
 
 # Non-interactive (CI/CD)
@@ -237,9 +229,6 @@ If all nodes are destroyed and new infrastructure is provisioned:
 3. **Restore the snapshot** once a leader is active:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.example.io"
-export VAULT_TOKEN="<root-token>"
-
 ./scripts/restore-snapshot.sh nonprod \
   vault-nonprod/daily/vault-snapshot-20260429-060000.snap
 ```

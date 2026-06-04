@@ -1,8 +1,7 @@
 // Vault Cluster - Cluster Status (scripted pipeline)
-// Vault token fetched from AWS Secrets Manager at runtime.
+// Vault token resolved by the status script at runtime.
 
 def envName = env.JOB_NAME.split('/')[1]
-def clusterName = "vault-${envName}"
 
 node {
     timestamps {
@@ -16,13 +15,7 @@ node {
 
                 stage('Cluster Status') {
                     withAwsAuth(envName, img) {
-                        sh """
-                            export VAULT_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --secret-id ${clusterName}/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            ./scripts/cluster-status.sh ${envName}
-                        """
+                        sh "./scripts/cluster-status.sh ${envName}"
                     }
                 }
             } finally {

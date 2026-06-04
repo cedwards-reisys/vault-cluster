@@ -1,2 +1,4 @@
-# Generated files - do not commit
-userdata.sh
+# Generated userdata may include environment-specific infrastructure metadata.
+# Do not commit generated artifacts from this directory.
+*
+!.gitignore

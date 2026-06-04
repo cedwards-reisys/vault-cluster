@@ -264,8 +264,9 @@ headroom without moving to an AMI bake, `launch-node.sh` now gzips the
 rendered userdata before passing it to `aws ec2 run-instances`.
 
 **Decision.** Keep userdata inline. Gzip at launch time (cloud-init
-decompresses transparently). The Terraform-generated `generated/userdata.sh`
-stays plain-text on disk for debugging; only the wire payload is compressed.
+decompresses transparently). The Terraform-generated
+`generated/<cluster>-userdata.sh` stays plain-text on disk for debugging; only
+the wire payload is compressed.
 Do not adopt AMI bake, `#include` from S3, or cloud-config multipart MIME
 at this time.
 
@@ -276,7 +277,7 @@ at this time.
   transparently since ~2011. Detected via gzip magic bytes (0x1f 0x8b)
   before the shebang or `#cloud-config` check.
 - Plain file remains readable via `terraform/modules/vault-nodes/generated/
-  userdata.sh` for inspection and diff.
+  <cluster>-userdata.sh` for inspection and diff.
 - `launch-node.sh:prepare_userdata()` emits a startup log line reporting
   raw/compressed sizes and percentage of limit, and refuses to launch if
   even compressed userdata exceeds the limit.

@@ -73,7 +73,7 @@ Before starting:
 
 2. **Ensure you have**:
    - AWS CLI configured
-   - `VAULT_ADDR` and `VAULT_TOKEN` set
+   - Access to read SSM config and `<cluster>/vault/root-token` in Secrets Manager
    - Sufficient IAM permissions for EC2 operations
 
 3. **Schedule maintenance window** (updates take ~15-20 minutes total)
@@ -85,9 +85,6 @@ Before starting:
 Use the provided script for fully automated rolling updates:
 
 ```bash
-export VAULT_ADDR="https://vault.example.com"
-export VAULT_TOKEN="<your-token>"
-
 ./scripts/rolling-update.sh <env>
 ```
 
@@ -364,9 +361,6 @@ jobs:
 
       - name: Rolling Update
         working-directory: vault-cluster
-        env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
           cd terraform
           tofu init
@@ -386,19 +380,16 @@ pipeline {
 
     environment {
         AWS_REGION = 'us-east-1'
-        VAULT_ADDR = credentials('vault-addr')
     }
 
     stages {
         stage('Rolling Update') {
             steps {
-                withCredentials([string(credentialsId: 'vault-token', variable: 'VAULT_TOKEN')]) {
-                    dir('vault-cluster') {
-                        dir('terraform') {
-                            sh 'tofu init'
-                        }
-                        sh './scripts/rolling-update.sh <env> --yes'
+                dir('vault-cluster') {
+                    dir('terraform') {
+                        sh 'tofu init'
                     }
+                    sh './scripts/rolling-update.sh <env> --yes'
                 }
             }
         }
@@ -435,7 +426,7 @@ Pre-Update:
 [ ] Verify all 3 Raft peers are voters
 [ ] Create Raft snapshot backup
 [ ] Notify stakeholders of maintenance window
-[ ] Ensure VAULT_TOKEN with operator permissions
+[ ] Ensure <cluster>/vault/root-token exists and caller can read it
 
 Update:
 [ ] Run ./scripts/rolling-update.sh <env>
@@ -491,13 +482,10 @@ Post-Update:
 ### cluster-status.sh
 
 ```bash
-# Auto-detect Vault address from Terraform
-./scripts/cluster-status.sh
+# Resolve Vault address and token from AWS
+./scripts/cluster-status.sh <env>
 
-# Explicit address
-./scripts/cluster-status.sh https://vault.example.com
-
-# With Raft details (requires VAULT_TOKEN)
+# Optional explicit token override
 export VAULT_TOKEN="..."
-./scripts/cluster-status.sh
+./scripts/cluster-status.sh <env>
 ```

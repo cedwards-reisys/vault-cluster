@@ -20,6 +20,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
 source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
 
 # Colors
@@ -32,6 +33,8 @@ if [ -z "${VAULT_ADDR:-}" ]; then
     VAULT_ADDR=$(ssm_get vault-url)
 fi
 export VAULT_ADDR
+
+load_vault_token >/dev/null 2>&1 || true
 
 echo "=================================="
 echo "Vault Cluster Health Check"
@@ -104,7 +107,7 @@ if [ -n "${VAULT_TOKEN:-}" ]; then
     fi
 else
     echo ""
-    echo -e "${YELLOW}Note: Set VAULT_TOKEN for detailed Raft status${NC}"
+    echo -e "${YELLOW}Note: Vault token unavailable; skipping detailed Raft status${NC}"
 fi
 
 echo ""

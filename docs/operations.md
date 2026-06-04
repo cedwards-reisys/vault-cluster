@@ -86,12 +86,10 @@ The node management scripts (`launch-node.sh`, `terminate-node.sh`, `rolling-upd
 ./scripts/terminate-node.sh nonprod i-0abc123
 
 # Rolling update in prod
-VAULT_ADDR=https://vault.prod.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh prod
+./scripts/rolling-update.sh prod
 
-# cluster-status.sh doesn't need VAULT_ENV (no tofu dependency)
-VAULT_ADDR=https://vault.nonprod.example.io VAULT_TOKEN=<token> \
-  ./scripts/cluster-status.sh
+# Cluster status
+./scripts/cluster-status.sh nonprod
 ```
 
 When `VAULT_ENV` is set, scripts automatically run `tofu init -reconfigure` with the correct backend config before reading outputs. When unset, behavior is unchanged (uses whatever backend is currently initialized).
@@ -150,8 +148,7 @@ Backup automation requires a **one-time Vault configuration** to set up IAM auth
 ./scripts/env.sh nonprod-test apply
 
 # 3. Roll nodes to pick up the systemd timer
-VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh nonprod-test
+./scripts/rolling-update.sh nonprod-test
 ```
 
 ### Verifying Backups
@@ -196,9 +193,6 @@ aws s3 cp vault-backup-*.snap s3://vault-nonprod-backups/vault-nonprod/daily/
 The restore script lists available snapshots and guides you through the process:
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod-test.example.io"
-export VAULT_TOKEN="<root-token>"
-
 ./scripts/restore-snapshot.sh nonprod-test
 ```
 
@@ -214,9 +208,6 @@ This will:
 ### Direct Restore (with known S3 key)
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod-test.example.io"
-export VAULT_TOKEN="<root-token>"
-
 ./scripts/restore-snapshot.sh nonprod-test \
   vault-nonprod-test/daily/vault-snapshot-20260317-060000.snap
 ```
@@ -237,11 +228,6 @@ Copy all Vault data from nonprod to nonprod-test for testing and development.
 ### Usage
 
 ```bash
-export VAULT_NONPROD_ADDR="https://vault.nonprod.example.io"
-export VAULT_NONPROD_TOKEN="<nonprod-root-token>"
-export VAULT_TEST_ADDR="https://vault.nonprod-test.example.io"
-export VAULT_TEST_TOKEN="<nonprod-test-root-token>"
-
 ./scripts/sync-to-nonprod-test.sh
 ```
 
@@ -413,10 +399,7 @@ Typical reasons: scheduled rotation, key-exposure incident, team-transition hand
 ### Usage
 
 ```bash
-export VAULT_ADDR="https://vault.nonprod.example.io"
-export VAULT_TOKEN="<root-token>"
-
-./scripts/rekey-recovery.sh
+./scripts/rekey-recovery.sh nonprod
 # Enter current recovery keys when prompted.
 ```
 
@@ -754,22 +737,20 @@ destroy a protected resource. A variable would defeat the fence.
 ./scripts/terminate-node.sh <env> <instance-id>
 
 # Rolling update
-VAULT_ADDR=<url> VAULT_TOKEN=<token> ./scripts/rolling-update.sh <env>
+./scripts/rolling-update.sh <env>
 
 # Cluster health
-VAULT_ADDR=<url> VAULT_TOKEN=<token> ./scripts/cluster-status.sh
+./scripts/cluster-status.sh <env>
 
 # Backup/restore
 ./scripts/restore-snapshot.sh <env> [s3-key]
 
 # Data sync
-VAULT_NONPROD_ADDR=<url> VAULT_NONPROD_TOKEN=<token> \
-VAULT_TEST_ADDR=<url> VAULT_TEST_TOKEN=<token> \
 ./scripts/sync-to-nonprod-test.sh
 
 # Credential management
 ./scripts/store-vault-credentials.sh <env>
-./scripts/rekey-recovery.sh
+./scripts/rekey-recovery.sh <env>
 
 # Manual snapshot
 vault operator raft snapshot save backup.snap
@@ -780,14 +761,14 @@ vault operator raft snapshot save backup.snap
 | Variable | Used By | Description |
 |----------|---------|-------------|
 | `VAULT_ENV` | launch-node, terminate-node, rolling-update | Selects backend config for tofu |
-| `VAULT_ADDR` | All vault CLI operations | Vault API address |
-| `VAULT_TOKEN` | All vault CLI operations | Authentication token |
+| `VAULT_ADDR` | Vault CLI operations | Optional override; scripts otherwise load from SSM |
+| `VAULT_TOKEN` | Vault CLI operations | Optional override; scripts otherwise load from Secrets Manager |
 | `VAULT_CACERT` | Vault CLI (optional) | Path to CA cert for TLS verification |
 | `VAULT_SKIP_VERIFY` | Vault CLI (optional) | Skip TLS verification |
-| `VAULT_NONPROD_ADDR` | sync-to-nonprod-test | Source Vault address |
-| `VAULT_NONPROD_TOKEN` | sync-to-nonprod-test | Source root/operator token |
-| `VAULT_TEST_ADDR` | sync-to-nonprod-test | Target Vault address |
-| `VAULT_TEST_TOKEN` | sync-to-nonprod-test | Target root/operator token |
+| `VAULT_NONPROD_ADDR` | sync-to-nonprod-test | Optional source Vault address override |
+| `VAULT_NONPROD_TOKEN` | sync-to-nonprod-test | Optional source token override |
+| `VAULT_TEST_ADDR` | sync-to-nonprod-test | Optional target Vault address override |
+| `VAULT_TEST_TOKEN` | sync-to-nonprod-test | Optional target token override |
 
 ### Files at a Glance
 

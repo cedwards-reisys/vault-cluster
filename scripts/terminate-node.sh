@@ -27,7 +27,8 @@
 #
 # Prerequisites:
 #   - AWS CLI configured
-#   - VAULT_TOKEN set (required if using --remove-from-raft)
+#   - Vault root token stored in Secrets Manager, or VAULT_TOKEN set
+#     (required if using --remove-from-raft)
 
 set -euo pipefail
 
@@ -88,9 +89,13 @@ check_prerequisites() {
     command -v aws >/dev/null 2>&1 || { log_error "aws CLI not found"; exit 1; }
     command -v jq >/dev/null 2>&1 || { log_error "jq not found"; exit 1; }
 
-    if [ -z "${VAULT_TOKEN:-}" ]; then
-        log_warn "VAULT_TOKEN not set - will skip Raft peer removal"
-        log_warn "The node will be removed from Raft automatically after timeout"
+    if ! load_vault_token; then
+        if [ "$REMOVE_FROM_RAFT" == "true" ]; then
+            log_error "Vault token required for --remove-from-raft"
+            exit 1
+        fi
+
+        log_warn "Vault token unavailable - leader step-down and Raft status will be skipped"
     fi
 }
 
@@ -158,8 +163,8 @@ remove_from_raft() {
         return 0
     fi
 
-    if [ -z "${VAULT_TOKEN:-}" ]; then
-        log_error "VAULT_TOKEN required for --remove-from-raft"
+    if [ -z "${VAULT_TOKEN:-}" ] && ! load_vault_token; then
+        log_error "Vault token required for --remove-from-raft"
         exit 1
     fi
 

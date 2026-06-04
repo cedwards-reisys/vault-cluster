@@ -1,5 +1,5 @@
 // Vault Cluster - Sync nonprod data to nonprod-test (scripted pipeline)
-// Vault tokens for both environments fetched from AWS Secrets Manager.
+// Vault addresses and tokens resolved by the sync script at runtime.
 
 properties([
     parameters([
@@ -28,35 +28,13 @@ node {
                 stage('Sync') {
                     // Both envs are in nonprod account — instance profile covers both
                     withAwsAuth('nonprod', img) {
-                        sh """
-                            export VAULT_NONPROD_ADDR='https://vault.nonprod.example.io'
-                            export VAULT_TEST_ADDR='https://vault.nonprod-test.example.io'
-
-                            export VAULT_NONPROD_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --region us-east-1 \
-                                --secret-id vault-nonprod/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            export VAULT_TEST_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --region us-east-1 \
-                                --secret-id vault-nonprod-test/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            ./scripts/sync-to-nonprod-test.sh --yes
-                        """
+                        sh "./scripts/sync-to-nonprod-test.sh --yes"
                     }
                 }
 
                 stage('Verify') {
                     withAwsAuth('nonprod', img) {
-                        sh """
-                            export VAULT_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --region us-east-1 \
-                                --secret-id vault-nonprod/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            ./scripts/cluster-status.sh nonprod-test
-                        """
+                        sh "./scripts/cluster-status.sh nonprod-test"
                     }
                 }
             } finally {

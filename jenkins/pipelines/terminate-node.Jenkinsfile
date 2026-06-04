@@ -1,8 +1,7 @@
 // Vault Cluster - Terminate Node (scripted pipeline)
-// Vault token fetched from AWS Secrets Manager at runtime.
+// Vault token resolved by the terminate script when needed.
 
 def envName = env.JOB_NAME.split('/')[1]
-def clusterName = "vault-${envName}"
 
 properties([
     parameters([
@@ -32,13 +31,7 @@ node {
                 stage('Terminate Node') {
                     withAwsAuth(envName, img) {
                         def raftFlag = params.REMOVE_FROM_RAFT ? '--remove-from-raft' : ''
-                        sh """
-                            export VAULT_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --secret-id ${clusterName}/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            ./scripts/terminate-node.sh ${envName} ${params.INSTANCE_ID} ${raftFlag} --yes
-                        """
+                        sh "./scripts/terminate-node.sh ${envName} ${params.INSTANCE_ID} ${raftFlag} --yes"
                     }
                 }
             } finally {

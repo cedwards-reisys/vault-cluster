@@ -1,5 +1,5 @@
 // Vault Cluster - Rekey Recovery Keys (scripted pipeline)
-// Vault token fetched from AWS Secrets Manager at runtime.
+// Vault token resolved by the rekey script at runtime.
 
 properties([
     parameters([
@@ -39,14 +39,7 @@ node {
 
                 stage('Rekey') {
                     withAwsAuth(params.ENVIRONMENT, img) {
-                        sh """
-                            export VAULT_TOKEN=\$(aws secretsmanager get-secret-value \
-                                --secret-id ${clusterName}/vault/root-token \
-                                --query SecretString --output text | jq -r '.token')
-
-                            export VAULT_ADDR='${vaultAddr}'
-                            ./scripts/rekey-recovery.sh
-                        """
+                        sh "./scripts/rekey-recovery.sh ${params.ENVIRONMENT}"
                     }
                 }
 

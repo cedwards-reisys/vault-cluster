@@ -20,14 +20,20 @@
 #   - Cluster is unsealed and reachable
 #   - You have the CURRENT recovery keys and a root token
 #
-# Usage: ./scripts/rekey-recovery.sh
+# Usage: ./scripts/rekey-recovery.sh [env]
 #
 # Requires:
-#   VAULT_ADDR  - Vault address
-#   VAULT_TOKEN - Root token
+#   If env is provided, VAULT_ADDR and VAULT_TOKEN are loaded from SSM and
+#   Secrets Manager unless already set.
+#   Without env, provide:
+#     VAULT_ADDR  - Vault address
+#     VAULT_TOKEN - Root token
 #   VAULT_CACERT - (optional) path to CA cert
 
 set -euo pipefail
+
+ENV="${1:-${VAULT_ENV:-}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors
 RED='\033[0;31m'
@@ -43,13 +49,29 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 command -v curl >/dev/null 2>&1 || { log_error "curl not found"; exit 1; }
 command -v jq >/dev/null 2>&1 || { log_error "jq not found"; exit 1; }
 
+if [ -n "$ENV" ]; then
+    command -v aws >/dev/null 2>&1 || { log_error "aws CLI not found"; exit 1; }
+    # shellcheck source=scripts/resolve-env.sh
+    source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
+
+    if [ -z "${VAULT_ADDR:-}" ]; then
+        VAULT_ADDR=$(ssm_get vault-url)
+    fi
+    export VAULT_ADDR
+
+    if ! load_vault_token; then
+        log_error "Vault root token required for recovery key rekey"
+        exit 1
+    fi
+fi
+
 if [ -z "${VAULT_ADDR:-}" ]; then
-    log_error "VAULT_ADDR not set"
+    log_error "VAULT_ADDR not set (provide <env> or set VAULT_ADDR)"
     exit 1
 fi
 
 if [ -z "${VAULT_TOKEN:-}" ]; then
-    log_error "VAULT_TOKEN not set (root token required)"
+    log_error "VAULT_TOKEN not set (provide <env> or set VAULT_TOKEN)"
     exit 1
 fi
 
@@ -100,7 +122,7 @@ echo "  Key shares:    $KEY_SHARES"
 echo "  Key threshold: $KEY_THRESHOLD"
 echo ""
 log_warn "This will generate new recovery keys, replacing any existing ones."
-read -p "Continue? (yes/no): " confirm
+read -r -p "Continue? (yes/no): " confirm
 if [ "$confirm" != "yes" ]; then
     log_info "Aborted"
     exit 0
@@ -150,7 +172,7 @@ if [ "$REQUIRED" -gt 0 ] && [ "$PROGRESS" -eq 0 ]; then
 
     KEYS_SUBMITTED=0
     while [ "$KEYS_SUBMITTED" -lt "$REQUIRED" ]; do
-        read -sp "Recovery key $((KEYS_SUBMITTED + 1))/$REQUIRED: " key
+        read -r -s -p "Recovery key $((KEYS_SUBMITTED + 1))/$REQUIRED: " key
         echo ""
 
         if [ -z "$key" ]; then

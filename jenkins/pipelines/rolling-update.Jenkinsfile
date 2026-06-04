@@ -1,8 +1,7 @@
 // Vault Cluster - Rolling Update (scripted pipeline)
-// Vault token fetched from AWS Secrets Manager at runtime.
+// Vault token resolved by the scripts at runtime.
 
 def envName = env.JOB_NAME.split('/')[1]
-def clusterName = "vault-${envName}"
 
 properties([
     parameters([
@@ -19,18 +18,10 @@ node {
                 }
 
                 def img = buildVaultOpsImage()
-                def fetchToken = """
-                    export VAULT_TOKEN=\$(aws secretsmanager get-secret-value \
-                        --secret-id ${clusterName}/vault/root-token \
-                        --query SecretString --output text | jq -r '.token')
-                """.stripIndent().trim()
 
                 stage('Pre-flight Check') {
                     withAwsAuth(envName, img) {
-                        sh """
-                            ${fetchToken}
-                            ./scripts/cluster-status.sh ${envName}
-                        """
+                        sh "./scripts/cluster-status.sh ${envName}"
                     }
                 }
 
@@ -41,19 +32,13 @@ node {
                 stage('Rolling Update') {
                     def skipFlag = params.SKIP_TERRAFORM ? '--skip-terraform' : ''
                     withAwsAuth(envName, img) {
-                        sh """
-                            ${fetchToken}
-                            ./scripts/rolling-update.sh ${envName} ${skipFlag} --yes
-                        """
+                        sh "./scripts/rolling-update.sh ${envName} ${skipFlag} --yes"
                     }
                 }
 
                 stage('Post-update Health Check') {
                     withAwsAuth(envName, img) {
-                        sh """
-                            ${fetchToken}
-                            ./scripts/cluster-status.sh ${envName}
-                        """
+                        sh "./scripts/cluster-status.sh ${envName}"
                     }
                 }
             } finally {

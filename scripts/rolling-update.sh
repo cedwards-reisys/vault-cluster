@@ -18,8 +18,8 @@
 #
 # Prerequisites:
 #   - AWS CLI configured
-#   - OpenTofu installed (if not using --skip-terraform)
-#   - VAULT_TOKEN environment variable set
+#   - OpenTofu installed unless using --skip-terraform with generated userdata present
+#   - Vault root token stored in Secrets Manager, or VAULT_TOKEN set
 
 set -euo pipefail
 
@@ -86,9 +86,8 @@ check_prerequisites() {
         command -v tofu >/dev/null 2>&1 || { log_error "tofu not found (required unless --skip-terraform)"; exit 1; }
     fi
 
-    if [ -z "${VAULT_TOKEN:-}" ]; then
-        log_error "VAULT_TOKEN environment variable not set"
-        echo "A token with operator permissions is required for rolling updates"
+    if ! load_vault_token; then
+        log_error "A token with operator permissions is required for rolling updates"
         exit 1
     fi
 
@@ -461,7 +460,7 @@ update_node() {
 
     # Launch new node (will use same node_id and rejoin Raft automatically)
     log_info "Launching new node..."
-    if ! "$SCRIPT_DIR/launch-node.sh" "$VAULT_ENV" "$az_index" --yes; then
+    if ! "$SCRIPT_DIR/launch-node.sh" "$VAULT_ENV" "$az_index" --yes --skip-terraform; then
         log_error "Failed to launch new node in $az"
         exit 1
     fi
