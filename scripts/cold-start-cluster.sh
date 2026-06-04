@@ -50,7 +50,7 @@
 # Prerequisites:
 #   - AWS CLI configured with SSM permissions
 #   - launch-node.sh and its dependencies available
-#   - Persistent EBS volumes exist with prior Raft data (or fresh volumes for init)
+#   - Persistent EBS volumes and ENIs exist for each Vault AZ
 
 set -euo pipefail
 
@@ -92,6 +92,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
 source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
 
 # Colors
@@ -480,7 +481,7 @@ main() {
 
     if [ "$AUTO_CONFIRM" != "true" ]; then
         echo ""
-        read -p "Continue with cold start recovery? (yes/no): " confirm
+        read -r -p "Continue with cold start recovery? (yes/no): " confirm
         if [ "$confirm" != "yes" ]; then
             log_info "Aborted"
             exit 0

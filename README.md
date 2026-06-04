@@ -43,7 +43,7 @@ A production-ready 3-node HashiCorp Vault cluster deployed on AWS using OpenTofu
 - **High Availability**: 3-node Raft cluster across 3 Availability Zones
 - **Auto-unseal**: AWS KMS for automatic unsealing on node restart
 - **Auto-join**: New nodes automatically discover and join the cluster via AWS tags
-- **Persistent Storage**: 200GB dedicated EBS volumes per AZ survive instance replacement
+- **Persistent Identity**: Dedicated EBS volumes and ENIs per AZ survive instance replacement
 - **Stable Node Identity**: Node IDs are AZ-based, enabling seamless instance replacement
 - **EBS Identity Sentinel**: Volume attaches abort if the volume's recorded cluster/AZ doesn't match the mounting node (guards against restored snapshots and mis-tagged volumes)
 - **Internal NLB**: Network Load Balancer in private subnets with TLS termination (ACM cert)
@@ -114,7 +114,7 @@ This creates:
 - IAM roles and policies
 - Security groups
 - Network Load Balancer
-- Persistent EBS volumes (one per AZ)
+- Persistent EBS volumes and ENIs (one pair per AZ)
 - Generated userdata script
 
 **Note**: This does NOT create EC2 instances. Nodes are managed by scripts.
@@ -134,7 +134,7 @@ Create a CNAME record or Route53 alias.
 
 ```bash
 # Launch first node
-VAULT_ENV=nonprod-test ./scripts/launch-node.sh 0
+./scripts/launch-node.sh nonprod-test 0
 
 # Wait for it to be healthy, then initialize Vault
 export VAULT_ADDR="https://vault.nonprod-test.example.io"
@@ -144,8 +144,8 @@ vault operator init -recovery-shares=5 -recovery-threshold=3
 ./scripts/store-vault-credentials.sh nonprod-test
 
 # Launch remaining nodes
-VAULT_ENV=nonprod-test ./scripts/launch-node.sh 1
-VAULT_ENV=nonprod-test ./scripts/launch-node.sh 2
+./scripts/launch-node.sh nonprod-test 1
+./scripts/launch-node.sh nonprod-test 2
 ```
 
 ### 6. Verify Cluster
@@ -202,7 +202,7 @@ vault-cluster/
 │       ├── nlb/                 # Network Load Balancer
 │       ├── backup/              # S3 backup bucket + lifecycle + IAM
 │       ├── monitoring/          # CloudWatch alarms (NLB, EBS)
-│       └── vault-nodes/         # Persistent EBS volumes + userdata generation
+│       └── vault-nodes/         # Persistent EBS volumes, ENIs + userdata generation
 │           ├── templates/
 │           │   └── userdata.sh.tpl  # Node bootstrap script (includes backup timer)
 │           └── generated/
@@ -248,6 +248,7 @@ vault-cluster/
 | `aws_region` | AWS region | - |
 | `vpc_id` | Existing VPC ID | - |
 | `private_subnet_ids` | 3 private subnet IDs (one per AZ) | - |
+| `vault_network_interface_private_ips` | Optional primary private IPs for persistent Vault ENIs, aligned with `private_subnet_ids` | `[]` |
 | `acm_certificate_arn` | ACM certificate ARN | - |
 | `cluster_name` | Cluster name (used in resource names) | - |
 | `vault_domain` | Domain for Vault access | - |
@@ -291,10 +292,10 @@ aws ec2 describe-instances \
   --output table
 
 # Terminate the node (data preserved on EBS)
-./scripts/terminate-node.sh <instance-id>
+./scripts/terminate-node.sh <env> <instance-id>
 
 # Launch replacement (will rejoin with same node_id)
-./scripts/launch-node.sh <az-index>  # 0, 1, or 2
+./scripts/launch-node.sh <env> <az-index>  # 0, 1, or 2
 ```
 
 ### Rolling Updates (AMI or Vault Version)
@@ -303,15 +304,15 @@ See [docs/rolling-updates.md](docs/rolling-updates.md) for the full runbook, inc
 
 ```bash
 # Update vault_version in terraform/environments/nonprod-test.tfvars, then:
-VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
+VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
   ./scripts/rolling-update.sh nonprod-test
 ```
 
-After each node replacement, the script runs a 6-check canary against the
-new instance (SSM, vault service, unsealed, Raft membership, voter status,
-full peer view) before moving to the next AZ. On canary failure the script
-halts with the cluster at N-0-failed (2 old + 1 new-broken, quorum retained)
-so operators can diagnose before cascading the failure.
+After each node replacement, the script runs a canary against the new instance
+(SSM, vault service, unsealed, Raft membership, voter status, Raft address when
+configured, full peer view) before moving to the next AZ. On canary failure the
+script halts with the cluster at N-0-failed (2 old + 1 new-broken, quorum
+retained) so operators can diagnose before cascading the failure.
 
 ### Backup and Restore
 
@@ -339,21 +340,29 @@ This cluster uses scripts for node management instead of Auto Scaling Groups bec
 1. **Data Safety**: ASGs with instance refresh can replace all nodes simultaneously, causing data loss with Raft storage
 2. **Stable Node Identity**: Script-managed nodes use AZ-based node IDs that persist across instance replacement
 3. **Controlled Updates**: Rolling updates happen one node at a time with health verification
-4. **Persistent Storage**: EBS volumes are managed by Terraform but attached/detached by scripts
+4. **Persistent Identity**: EBS volumes and ENIs are managed by Terraform; scripts attach them to replacements and wait for EC2 termination to release them
 
 ### How Node Replacement Works
 
 ```
 1. terminate-node.sh terminates instance
-   └─► EBS volume detached (data preserved)
+   └─► EBS volume preserved and released by EC2 termination
+   └─► Primary ENI preserved and released by EC2 termination
    └─► Node appears "down" in Raft (not removed)
 
 2. launch-node.sh launches new instance
    └─► Same EBS volume reattached
    └─► Same node_id (cluster-az format)
+   └─► Same primary ENI reattached
    └─► Vault reads existing Raft data
    └─► Node reconnects to cluster automatically
 ```
+
+For reliable Raft replacement, each AZ has a persistent ENI that owns the
+private IP used by Vault's `cluster_addr`. AWS will not hand that private IP to
+another resource while the ENI exists, even while no Vault instance is attached.
+For existing clusters, import/adopt the current primary ENIs before rolling
+nodes if you need to preserve the existing Raft peer addresses.
 
 ## Security
 
@@ -431,8 +440,8 @@ If the leader is also failing:
 # Check volume state
 aws ec2 describe-volumes --volume-ids <vol-id>
 
-# If stuck "in-use" after instance termination, force detach
-aws ec2 detach-volume --volume-id <vol-id> --force
+# If stuck "in-use" after instance termination, stop and investigate.
+# Do not force-detach as routine automation; preserve data first.
 ```
 
 For the full troubleshooting catalog — including multi-AZ loss, interrupted
@@ -477,7 +486,7 @@ docker-compose run --rm vault-ops
 
 ```bash
 # Check cluster status
-./scripts/docker-run.sh ./scripts/cluster-status.sh
+./scripts/docker-run.sh ./scripts/cluster-status.sh nonprod-test
 
 # Run Terraform plan
 ./scripts/docker-run.sh tofu plan
@@ -485,7 +494,7 @@ docker-compose run --rm vault-ops
 # Rolling update
 export VAULT_ADDR="https://vault.example.com"
 export VAULT_TOKEN="<token>"
-./scripts/docker-run.sh ./scripts/rolling-update.sh
+./scripts/docker-run.sh ./scripts/rolling-update.sh nonprod-test
 ```
 
 ### Build Manually

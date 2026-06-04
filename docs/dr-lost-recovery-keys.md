@@ -124,7 +124,8 @@ Only after the new cluster has validated, DNS has propagated, and at least one
 full daily backup cycle has run on the new cluster:
 
 ```bash
-VAULT_ENV=<env> ./scripts/terminate-node.sh --all
+# Terminate each old-cluster instance explicitly.
+./scripts/terminate-node.sh <env> <instance-id> --remove-from-raft
 ```
 
 ### RTO estimate

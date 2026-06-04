@@ -76,18 +76,18 @@ What it does internally:
 
 ### Using Operational Scripts with Environments
 
-The node management scripts (`launch-node.sh`, `terminate-node.sh`, `rolling-update.sh`) support the `VAULT_ENV` environment variable:
+The node management scripts (`launch-node.sh`, `terminate-node.sh`, `rolling-update.sh`) take the environment as the first positional argument:
 
 ```bash
 # Launch a node in nonprod-test
-VAULT_ENV=nonprod-test ./scripts/launch-node.sh 0
+./scripts/launch-node.sh nonprod-test 0
 
 # Terminate a node in nonprod
-VAULT_ENV=nonprod ./scripts/terminate-node.sh i-0abc123
+./scripts/terminate-node.sh nonprod i-0abc123
 
 # Rolling update in prod
-VAULT_ENV=prod VAULT_ADDR=https://vault.prod.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh
+VAULT_ADDR=https://vault.prod.example.io VAULT_TOKEN=<token> \
+  ./scripts/rolling-update.sh prod
 
 # cluster-status.sh doesn't need VAULT_ENV (no tofu dependency)
 VAULT_ADDR=https://vault.nonprod.example.io VAULT_TOKEN=<token> \
@@ -150,8 +150,8 @@ Backup automation requires a **one-time Vault configuration** to set up IAM auth
 ./scripts/env.sh nonprod-test apply
 
 # 3. Roll nodes to pick up the systemd timer
-VAULT_ENV=nonprod-test VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
-  ./scripts/rolling-update.sh
+VAULT_ADDR=https://vault.nonprod-test.example.io VAULT_TOKEN=<token> \
+  ./scripts/rolling-update.sh nonprod-test
 ```
 
 ### Verifying Backups
@@ -487,7 +487,7 @@ aws s3 cp vault-nonprod-migration-*.snap s3://vault-nonprod-backups/migration/
 #### 3. Launch First Node and Initialize
 
 ```bash
-VAULT_ENV=nonprod ./scripts/launch-node.sh 0
+./scripts/launch-node.sh nonprod 0
 
 # Wait for the node to boot (~2 minutes)
 # Point to the new NLB
@@ -515,8 +515,8 @@ vault operator raft snapshot restore -force vault-nonprod-migration-*.snap
 #### 5. Launch Remaining Nodes
 
 ```bash
-VAULT_ENV=nonprod ./scripts/launch-node.sh 1
-VAULT_ENV=nonprod ./scripts/launch-node.sh 2
+./scripts/launch-node.sh nonprod 1
+./scripts/launch-node.sh nonprod 2
 
 # Verify
 VAULT_ADDR="https://<nlb-dns-name>" VAULT_TOKEN="<token>" ./scripts/cluster-status.sh
@@ -588,7 +588,7 @@ Deploy at 1.9.0, restore snapshot, then do rolling upgrades through intermediate
 
 # 3. Upgrade through versions (edit tfvars, then rolling-update each time):
 #    1.9.0 → 1.12.x → 1.15.x → 1.17.x → 1.19.x
-VAULT_ENV=nonprod-test ./scripts/rolling-update.sh
+./scripts/rolling-update.sh nonprod-test
 
 # 4. After each upgrade, verify:
 vault status
@@ -711,8 +711,8 @@ aws ec2 describe-volumes --region <region> \
               "Name=tag:vault-az,Values=<az>" \
     --query 'Volumes[].[VolumeId,State]' --output table
 
-# Detach if attached (should not be if all nodes were terminated first)
-aws ec2 detach-volume --volume-id vol-xxx --region <region>
+# If still attached, stop and investigate. All nodes should be terminated
+# before deleting the volume, and normal termination should release it.
 
 # Delete
 aws ec2 delete-volume --volume-id vol-xxx --region <region>
@@ -750,11 +750,11 @@ destroy a protected resource. A variable would defeat the fence.
 ./scripts/env.sh <env> apply
 
 # Launch/terminate nodes
-VAULT_ENV=<env> ./scripts/launch-node.sh <az-index>
-VAULT_ENV=<env> ./scripts/terminate-node.sh <instance-id>
+./scripts/launch-node.sh <env> <az-index>
+./scripts/terminate-node.sh <env> <instance-id>
 
 # Rolling update
-VAULT_ENV=<env> VAULT_ADDR=<url> VAULT_TOKEN=<token> ./scripts/rolling-update.sh
+VAULT_ADDR=<url> VAULT_TOKEN=<token> ./scripts/rolling-update.sh <env>
 
 # Cluster health
 VAULT_ADDR=<url> VAULT_TOKEN=<token> ./scripts/cluster-status.sh

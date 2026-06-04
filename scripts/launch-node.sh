@@ -4,7 +4,7 @@
 #
 # This script:
 # 1. Gets configuration from SSM Parameter Store and AWS API
-# 2. Launches an EC2 instance in the specified AZ
+# 2. Launches an EC2 instance in the specified AZ with the persistent ENI
 # 3. Attaches the persistent EBS volume for that AZ
 # 4. Registers the instance with the NLB target group
 # 5. Waits for the instance to be healthy
@@ -56,6 +56,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TOFU_DIR="$PROJECT_DIR/terraform"
 
 # Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
 source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
 
 # Colors
@@ -83,14 +84,6 @@ get_config() {
     INSTANCE_TYPE=$(cfg_get instance_type)
     INSTANCE_TAGS_JSON=$(cfg_get instance_tags)
 
-    # Subnets (JSON array in vault-config)
-    # shellcheck disable=SC2207  # intentional word-split; bash 3.2 lacks mapfile
-    SUBNET_IDS=($(cfg_get private_subnet_ids | jq -r '.[]? // empty'))
-    if [ "${#SUBNET_IDS[@]}" -eq 0 ]; then
-        log_error "No private_subnet_ids in vault-config for $CLUSTER_NAME"
-        exit 1
-    fi
-
     # Look up latest AL2023 ARM64 AMI (same filter as terraform)
     log_info "Looking up latest AMI..."
     AMI_ID=$(aws ec2 describe-images \
@@ -103,42 +96,45 @@ get_config() {
         --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
         --output text)
 
-    # Look up security group by name convention
-    # shellcheck disable=SC2207  # intentional word-split; bash 3.2 lacks mapfile
-    SECURITY_GROUP_IDS=($(aws ec2 describe-security-groups \
-        --region "$AWS_REGION" \
-        --filters "Name=group-name,Values=${CLUSTER_NAME}-vault-sg" \
-        --query 'SecurityGroups[].GroupId' \
-        --output text))
-    if [ "${#SECURITY_GROUP_IDS[@]}" -eq 0 ]; then
-        log_error "Security group ${CLUSTER_NAME}-vault-sg not found"
-        exit 1
-    fi
-
-    # Merge additional security group IDs from config (if any)
-    ADDITIONAL_SGS=$(cfg_get additional_security_group_ids 2>/dev/null | jq -r '.[]? // empty' 2>/dev/null || true)
-    if [ -n "$ADDITIONAL_SGS" ]; then
-        while read -r sg; do
-            [ -n "$sg" ] && SECURITY_GROUP_IDS+=("$sg")
-        done <<< "$ADDITIONAL_SGS"
-    fi
-
     # IAM instance profile follows naming convention
     IAM_INSTANCE_PROFILE="${CLUSTER_NAME}-vault-profile"
 
-    # Look up EBS volumes by tag
+    # Look up persistent resources by tag
     lookup_ebs_volumes
+    lookup_network_interfaces
+
+    if [ "${#NETWORK_INTERFACE_IDS[@]}" -ne "${#EBS_VOLUME_IDS[@]}" ]; then
+        log_error "Persistent ENI count does not match EBS volume count"
+        log_error "EBS volumes: ${#EBS_VOLUME_IDS[@]}, ENIs: ${#NETWORK_INTERFACE_IDS[@]}"
+        log_error "Expected exactly one tagged raft-network ENI per Vault AZ."
+        exit 1
+    fi
 
     # Validate AZ index
     if [ "$AZ_INDEX" -ge "${#EBS_VOLUME_IDS[@]}" ]; then
         log_error "Invalid AZ index: $AZ_INDEX (max: $((${#EBS_VOLUME_IDS[@]} - 1)))"
         exit 1
     fi
+    if [ "$AZ_INDEX" -ge "${#NETWORK_INTERFACE_IDS[@]}" ]; then
+        log_error "Invalid AZ index for persistent ENIs: $AZ_INDEX (max: $((${#NETWORK_INTERFACE_IDS[@]} - 1)))"
+        log_error "Run tofu apply, or import/tag the persistent Vault ENIs with vault-role=raft-network."
+        exit 1
+    fi
 
     # Get values for this AZ
     EBS_VOLUME_ID="${EBS_VOLUME_IDS[$AZ_INDEX]}"
     AVAILABILITY_ZONE="${EBS_VOLUME_AZS[$AZ_INDEX]}"
-    SUBNET_ID="${SUBNET_IDS[$AZ_INDEX]}"
+    NETWORK_INTERFACE_ID="${NETWORK_INTERFACE_IDS[$AZ_INDEX]}"
+    NETWORK_INTERFACE_AZ="${NETWORK_INTERFACE_AZS[$AZ_INDEX]}"
+    NETWORK_INTERFACE_PRIVATE_IP="${NETWORK_INTERFACE_PRIVATE_IPS[$AZ_INDEX]}"
+    NETWORK_INTERFACE_SUBNET_ID="${NETWORK_INTERFACE_SUBNET_IDS[$AZ_INDEX]}"
+
+    if [ "$NETWORK_INTERFACE_AZ" != "$AVAILABILITY_ZONE" ]; then
+        log_error "Persistent ENI AZ mismatch for index $AZ_INDEX"
+        log_error "EBS volume AZ: $AVAILABILITY_ZONE"
+        log_error "ENI AZ:        $NETWORK_INTERFACE_AZ"
+        exit 1
+    fi
 
     # Read userdata from generated file
     USERDATA_FILE="$TOFU_DIR/modules/vault-nodes/generated/userdata.sh"
@@ -212,6 +208,29 @@ check_ebs_volume() {
     log_info "EBS volume is available"
 }
 
+# Check if persistent ENI is available
+check_network_interface() {
+    log_info "Checking persistent ENI: $NETWORK_INTERFACE_ID..."
+
+    local eni_info state attached_instance
+    eni_info=$(aws ec2 describe-network-interfaces \
+        --region "$AWS_REGION" \
+        --network-interface-ids "$NETWORK_INTERFACE_ID" \
+        --query 'NetworkInterfaces[0]' \
+        --output json)
+
+    state=$(echo "$eni_info" | jq -r '.Status')
+    attached_instance=$(echo "$eni_info" | jq -r '.Attachment.InstanceId // empty')
+
+    if [ "$state" != "available" ]; then
+        log_error "Persistent ENI is not available (state: $state, attached: ${attached_instance:-none})"
+        log_error "Terminate the existing instance first, then wait for the ENI to detach."
+        exit 1
+    fi
+
+    log_info "Persistent ENI is available"
+}
+
 # Build tag specifications JSON and write to temp file
 # Uses a file to safely handle special characters in tag keys/values
 # (colons, #, etc.) without shell interpretation issues
@@ -246,16 +265,19 @@ launch_instance() {
     tag_spec_file=$(build_tag_spec_file)
     trap 'rm -f "$tag_spec_file"' RETURN
 
-    INSTANCE_ID=$(aws ec2 run-instances \
+    local run_args=(
+        aws ec2 run-instances
         --region "$AWS_REGION" \
         --image-id "$AMI_ID" \
         --instance-type "$INSTANCE_TYPE" \
-        --subnet-id "$SUBNET_ID" \
-        --security-group-ids "${SECURITY_GROUP_IDS[@]}" \
         --iam-instance-profile "Name=$IAM_INSTANCE_PROFILE" \
         --user-data "fileb://$USERDATA_GZ_FILE" \
         --metadata-options "HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=1,InstanceMetadataTags=enabled" \
         --tag-specifications "file://$tag_spec_file" \
+        --network-interfaces "NetworkInterfaceId=$NETWORK_INTERFACE_ID,DeviceIndex=0"
+    )
+
+    INSTANCE_ID=$("${run_args[@]}" \
         --query 'Instances[0].InstanceId' \
         --output text)
 
@@ -379,7 +401,9 @@ main() {
     echo "  Region:       $AWS_REGION"
     echo "  AZ Index:     $AZ_INDEX"
     echo "  AZ:           $AVAILABILITY_ZONE"
-    echo "  Subnet:       $SUBNET_ID"
+    echo "  ENI:          $NETWORK_INTERFACE_ID"
+    echo "  Subnet:       $NETWORK_INTERFACE_SUBNET_ID"
+    echo "  Private IP:   $NETWORK_INTERFACE_PRIVATE_IP (ENI-owned)"
     echo "  EBS Volume:   $EBS_VOLUME_ID"
     echo "  AMI:          $AMI_ID"
     echo "  Instance Type: $INSTANCE_TYPE"
@@ -387,10 +411,11 @@ main() {
 
     check_existing_instance
     check_ebs_volume
+    check_network_interface
 
     if [ "$AUTO_CONFIRM" != "true" ]; then
         echo ""
-        read -p "Launch instance? (yes/no): " confirm
+        read -r -p "Launch instance? (yes/no): " confirm
         if [ "$confirm" != "yes" ]; then
             log_info "Aborted"
             exit 0

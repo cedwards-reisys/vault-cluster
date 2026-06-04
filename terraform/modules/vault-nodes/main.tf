@@ -63,6 +63,27 @@ resource "aws_ebs_volume" "vault_data" {
   }
 }
 
+# Persistent ENIs for Vault Raft network identity - one per AZ.
+# These reserve the Raft cluster_addr private IPs while instances are replaced.
+resource "aws_network_interface" "vault_network" {
+  count = length(var.private_subnet_ids)
+
+  subnet_id       = var.private_subnet_ids[count.index]
+  security_groups = concat([var.security_group_id], var.additional_security_group_ids)
+  private_ips     = length(var.network_interface_private_ips) > 0 ? [var.network_interface_private_ips[count.index]] : null
+
+  tags = merge(var.tags, {
+    Name            = "${var.cluster_name}-eni-${var.availability_zones[count.index]}"
+    "vault-cluster" = var.cluster_name
+    "vault-az"      = var.availability_zones[count.index]
+    "vault-role"    = "raft-network"
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # Generate userdata script content for use by operational scripts
 resource "local_file" "userdata_template" {
   content = templatefile("${path.module}/templates/userdata.sh.tpl", {

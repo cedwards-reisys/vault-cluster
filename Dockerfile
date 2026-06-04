@@ -7,7 +7,7 @@ ARG TOFU_VERSION=1.6.2
 ARG VAULT_VERSION=1.21.4
 
 # Install base dependencies
-RUN dnf install -y \
+RUN dnf install -y --allowerasing \
     curl \
     unzip \
     jq \
@@ -17,6 +17,7 @@ RUN dnf install -y \
     less \
     groff \
     bash-completion \
+    shadow-utils \
     && dnf clean all
 
 # Install AWS CLI v2
@@ -39,8 +40,8 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
     && chmod +x /usr/local/bin/vault \
     && rm /tmp/vault.zip
 
-# Create non-root user
-RUN useradd -m -s /bin/bash operator
+# Create non-root user when the base image does not already provide one
+RUN id operator >/dev/null 2>&1 || useradd -m -s /bin/bash operator
 
 # Set up working directory
 WORKDIR /workspace

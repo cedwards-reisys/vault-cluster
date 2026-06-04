@@ -4,15 +4,17 @@ This document describes the process for performing rolling updates on the Vault 
 
 ## Overview
 
-The Vault cluster uses script-based node management with persistent EBS volumes. This enables safe rolling updates without data loss.
+The Vault cluster uses script-based node management with persistent EBS volumes and ENIs. This enables safe rolling updates without data loss or Raft address churn.
 
 ### Key Concepts
 
 - **Persistent EBS Volumes**: Each AZ has a dedicated EBS volume that survives instance replacement
+- **Persistent ENIs**: Each AZ has a dedicated ENI that reserves the node's private IP while instances are replaced
 - **Stable Node IDs**: Node IDs are AZ-based (`cluster-us-east-1a`), not instance-based
+- **Stable Raft Addresses**: `cluster_addr` uses the private IP owned by the persistent ENI
 - **No Raft Membership Changes**: When a node is replaced, it rejoins with the same identity
 - **One Node at a Time**: Scripts ensure only one node is updated at a time
-- **Per-instance Canary**: After each launch, `rolling-update.sh` verifies THIS new instance is truly healthy (SSM reachable, vault service active, unsealed, joined Raft, voter=true, full peer view) before moving to the next AZ
+- **Per-instance Canary**: After each launch, `rolling-update.sh` verifies THIS new instance is truly healthy (SSM reachable, vault service active, unsealed, joined Raft, voter=true, expected Raft address, full peer view) before moving to the next AZ
 
 ### Why Raft peer list shows stable entries across replacements
 
@@ -20,6 +22,16 @@ Because node IDs are `<cluster-name>-<az>` and don't change when an instance
 is replaced, `vault operator raft list-peers` continues to show 3 peers with
 the same IDs during and after rolling updates. The new instance takes over
 the existing peer slot — no `raft add-peer` / `raft remove-peer` churn.
+
+Raft also stores the peer address for that node ID. If replacements use
+ephemeral private IPs, the peer slot can retain the retired instance's
+`cluster_addr`. Persistent ENIs keep both the node ID and Raft address stable
+across swaps.
+
+For an existing cluster, import/adopt the current primary ENIs before rolling
+nodes if you need to preserve the addresses already recorded in Raft. Letting
+Terraform create new ENIs will reserve new addresses, which is fine for
+greenfield clusters but not a transparent migration for existing peer entries.
 
 This also means: if cluster topology ever changes (e.g., expanding from 3 to
 5 AZs), the old peer slots will NOT auto-clean from Raft config. That's a
@@ -76,7 +88,7 @@ Use the provided script for fully automated rolling updates:
 export VAULT_ADDR="https://vault.example.com"
 export VAULT_TOKEN="<your-token>"
 
-./scripts/rolling-update.sh
+./scripts/rolling-update.sh <env>
 ```
 
 The script will:
@@ -93,7 +105,7 @@ The script will:
 If you only need to replace instances without Terraform changes:
 
 ```bash
-./scripts/rolling-update.sh --skip-terraform
+./scripts/rolling-update.sh <env> --skip-terraform
 ```
 
 ### Method 2: Manual Node-by-Node
@@ -112,8 +124,8 @@ aws ec2 describe-instances \
 tofu apply
 
 # For each node (one at a time):
-./scripts/terminate-node.sh <instance-id>
-./scripts/launch-node.sh <az-index>  # 0, 1, or 2
+./scripts/terminate-node.sh <env> <instance-id>
+./scripts/launch-node.sh <env> <az-index>  # 0, 1, or 2
 
 # Wait and verify before proceeding to next node
 ./scripts/cluster-status.sh
@@ -131,7 +143,7 @@ vault operator raft list-peers
 
 2. Run the rolling update:
    ```bash
-   ./scripts/rolling-update.sh
+   ./scripts/rolling-update.sh <env>
    ```
 
 ### AMI Update (OS Patches)
@@ -139,12 +151,12 @@ vault operator raft list-peers
 The AMI data source automatically fetches the latest Amazon Linux 2023 AMI. Simply run:
 
 ```bash
-./scripts/rolling-update.sh
+./scripts/rolling-update.sh <env>
 ```
 
 If no Terraform changes are detected but you want to refresh instances anyway:
 ```bash
-./scripts/rolling-update.sh --skip-terraform
+./scripts/rolling-update.sh <env> --skip-terraform
 ```
 
 ### Configuration Changes
@@ -155,7 +167,7 @@ For changes to Vault configuration (in `userdata.sh.tpl`):
 2. Run `tofu apply` to regenerate userdata
 3. Run the rolling update:
    ```bash
-   ./scripts/rolling-update.sh --skip-terraform
+   ./scripts/rolling-update.sh <env> --skip-terraform
    ```
 
 ## What Happens During Update
@@ -165,13 +177,14 @@ For changes to Vault configuration (in `userdata.sh.tpl`):
 1. **Instance Termination**
    - Script calls `terminate-node.sh`
    - Instance deregistered from NLB target group
-   - EBS volume detached (data preserved)
    - Instance terminated
+   - EC2 releases the preserved EBS volume
+   - EC2 releases the preserved primary ENI
    - Raft cluster sees node as "down" (not removed)
 
 2. **New Instance Launch**
    - Script calls `launch-node.sh`
-   - New EC2 instance launched in same AZ
+   - New EC2 instance launched in same AZ with the persistent ENI
    - Same EBS volume attached
    - Userdata runs:
      - Installs Vault (new version if upgraded)
@@ -196,7 +209,7 @@ For changes to Vault configuration (in `userdata.sh.tpl`):
 | Phase | Duration |
 |-------|----------|
 | Instance termination | ~30 seconds |
-| EBS detach | ~10 seconds |
+| EBS/ENI release | ~10-30 seconds |
 | New instance launch | ~60 seconds |
 | EBS attach | ~10 seconds |
 | Userdata execution | ~90 seconds |
@@ -224,8 +237,8 @@ If a new node fails to rejoin the cluster:
 
 3. If unfixable, terminate and try again:
    ```bash
-   ./scripts/terminate-node.sh <instance-id>
-   ./scripts/launch-node.sh <az-index>
+   ./scripts/terminate-node.sh <env> <instance-id>
+   ./scripts/launch-node.sh <env> <az-index>
    ```
 
 ### Cluster Loses Quorum
@@ -256,7 +269,7 @@ If the new Vault version has issues:
 
 3. Run rolling update:
    ```bash
-   ./scripts/rolling-update.sh --skip-terraform
+   ./scripts/rolling-update.sh <env> --skip-terraform
    ```
 
 ### Resume After Interrupted Rolling Update
@@ -292,7 +305,7 @@ Steps to resume:
    re-attach the existing EBS volume and the node will rejoin Raft with the
    same identity:
    ```bash
-   VAULT_ENV=<env> ./scripts/launch-node.sh <env> <az-index>
+   ./scripts/launch-node.sh <env> <az-index>
    ```
 
 4. Wait for it to be healthy, then re-run the rolling update to finish
@@ -312,14 +325,14 @@ If a node has corrupted Raft data and can't rejoin:
 
 ```bash
 # Remove from Raft cluster (permanent removal)
-./scripts/terminate-node.sh <instance-id> --remove-from-raft
+./scripts/terminate-node.sh <env> <instance-id> --remove-from-raft
 
 # The EBS volume still has corrupted data, so we need to clear it
 # Option 1: Delete and recreate the EBS volume via Terraform
 # Option 2: Launch instance, SSH in, and wipe /opt/vault/data
 
 # Launch fresh node (will join as new peer)
-./scripts/launch-node.sh <az-index>
+./scripts/launch-node.sh <env> <az-index>
 ```
 
 ## Automation with CI/CD
@@ -358,7 +371,7 @@ jobs:
           cd terraform
           tofu init
           cd ..
-          ./scripts/rolling-update.sh
+          ./scripts/rolling-update.sh <env> --yes
 ```
 
 ### Jenkins Pipeline Example
@@ -384,7 +397,7 @@ pipeline {
                         dir('terraform') {
                             sh 'tofu init'
                         }
-                        sh './scripts/rolling-update.sh'
+                        sh './scripts/rolling-update.sh <env> --yes'
                     }
                 }
             }
@@ -425,7 +438,7 @@ Pre-Update:
 [ ] Ensure VAULT_TOKEN with operator permissions
 
 Update:
-[ ] Run ./scripts/rolling-update.sh
+[ ] Run ./scripts/rolling-update.sh <env>
 [ ] Monitor progress in terminal output
 [ ] Verify 3 Raft peers after completion
 
@@ -443,33 +456,36 @@ Post-Update:
 
 ```bash
 # Interactive
-./scripts/launch-node.sh <az-index>
+./scripts/launch-node.sh <env> <az-index>
 
 # Non-interactive (for automation)
-./scripts/launch-node.sh <az-index> --yes
+./scripts/launch-node.sh <env> <az-index> --yes
 ```
 
 ### terminate-node.sh
 
 ```bash
 # Interactive (preserves Raft membership for replacement)
-./scripts/terminate-node.sh <instance-id>
+./scripts/terminate-node.sh <env> <instance-id>
 
 # Non-interactive
-./scripts/terminate-node.sh <instance-id> --yes
+./scripts/terminate-node.sh <env> <instance-id> --yes
 
 # Permanent removal (removes from Raft)
-./scripts/terminate-node.sh <instance-id> --remove-from-raft --yes
+./scripts/terminate-node.sh <env> <instance-id> --remove-from-raft --yes
 ```
 
 ### rolling-update.sh
 
 ```bash
 # Full update (Terraform + node replacement)
-./scripts/rolling-update.sh
+./scripts/rolling-update.sh <env>
 
 # Skip Terraform (node replacement only)
-./scripts/rolling-update.sh --skip-terraform
+./scripts/rolling-update.sh <env> --skip-terraform
+
+# Non-interactive, after an external approval gate
+./scripts/rolling-update.sh <env> --yes
 ```
 
 ### cluster-status.sh

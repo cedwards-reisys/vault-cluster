@@ -6,7 +6,7 @@
 # 1. Runs tofu apply to update infrastructure (userdata, etc.)
 # 2. For each node, one at a time:
 #    - Terminates the old instance (EBS volume preserved)
-#    - Launches a new instance (reattaches EBS volume)
+#    - Launches a new instance (reattaches ENI + EBS volume)
 #    - New instance uses same stable node_id and rejoins Raft automatically
 #    - Verifies cluster health before proceeding
 #
@@ -14,7 +14,7 @@
 # doesn't change during updates. The replacement instance simply takes over
 # the same identity and resumes with existing Raft data.
 #
-# Usage: ./rolling-update.sh <env> [--skip-terraform]
+# Usage: ./rolling-update.sh <env> [--skip-terraform] [--yes]
 #
 # Prerequisites:
 #   - AWS CLI configured
@@ -26,14 +26,18 @@ set -euo pipefail
 # Parse arguments
 ENV=""
 SKIP_TERRAFORM=false
+AUTO_CONFIRM=false
 for arg in "$@"; do
     case $arg in
         --skip-terraform)
             SKIP_TERRAFORM=true
             ;;
+        --yes|-y)
+            AUTO_CONFIRM=true
+            ;;
         -*)
             echo "Unknown option: $arg"
-            echo "Usage: $0 <env> [--skip-terraform]"
+            echo "Usage: $0 <env> [--skip-terraform] [--yes]"
             exit 1
             ;;
         *)
@@ -45,7 +49,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$ENV" ]; then
-    echo "Usage: $0 <env> [--skip-terraform]"
+    echo "Usage: $0 <env> [--skip-terraform] [--yes]"
     echo "Environments: nonprod-test, nonprod, prod"
     exit 1
 fi
@@ -55,6 +59,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TOFU_DIR="$PROJECT_DIR/terraform"
 
 # Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
 source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
 
 # Colors
@@ -139,6 +144,14 @@ get_config() {
     fi
 
     lookup_ebs_volumes
+    lookup_network_interfaces
+
+    if [ "${#NETWORK_INTERFACE_IDS[@]}" -ne "${#EBS_VOLUME_IDS[@]}" ]; then
+        log_error "Persistent ENI count does not match EBS volume count"
+        log_error "EBS volumes: ${#EBS_VOLUME_IDS[@]}, ENIs: ${#NETWORK_INTERFACE_IDS[@]}"
+        log_error "Expected exactly one tagged raft-network ENI per Vault AZ."
+        exit 1
+    fi
 }
 
 # Check cluster health
@@ -175,6 +188,7 @@ check_cluster_health() {
 
 # Get running instances for the cluster
 get_running_instances() {
+    # shellcheck disable=SC2016  # JMESPath query uses literal backticks.
     aws ec2 describe-instances \
         --region "$AWS_REGION" \
         --filters \
@@ -215,6 +229,14 @@ canary_check_node() {
     local az="$2"
     local expected_peers="$3"
     local my_node_id="${CLUSTER_NAME}-${az}"
+    local expected_raft_addr=""
+    local expected_raft_hostport=""
+    local az_index
+    az_index=$(get_az_index "$az" || true)
+    if [ -n "$az_index" ] && [ "${#NETWORK_INTERFACE_PRIVATE_IPS[@]}" -gt 0 ]; then
+        expected_raft_hostport="${NETWORK_INTERFACE_PRIVATE_IPS[$az_index]}:8201"
+        expected_raft_addr="https://${expected_raft_hostport}"
+    fi
     local timeout="${CANARY_TIMEOUT:-300}"
     local interval=15
     local elapsed=0
@@ -223,13 +245,14 @@ canary_check_node() {
 
     # Build the remote health probe as a single SSM command. Runs on the new
     # instance and emits tab-separated output: <service_status>\t<http_code>
+    # shellcheck disable=SC2016  # Variables expand on the remote node.
     local probe_cmd='
         status=$(systemctl is-active vault 2>/dev/null || echo "unknown");
         http=$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" https://127.0.0.1:8200/v1/sys/health?standbyok=true 2>/dev/null || echo "000");
         echo -e "${status}\t${http}"
     '
 
-    while [ $elapsed -lt $timeout ]; do
+    while [ "$elapsed" -lt "$timeout" ]; do
         # --- Remote probe via SSM ---
         local params_file cmd_id
         params_file=$(mktemp)
@@ -281,7 +304,7 @@ canary_check_node() {
         else
             case "$http_code" in
                 200|429)
-                    local node_present is_voter peer_count
+                    local node_present is_voter peer_count peer_addr
                     node_present=$(echo "$raft" | jq -r --arg id "$my_node_id" \
                         '[.data.config.servers[]? | select(.node_id == $id)] | length' 2>/dev/null || echo "0")
                     node_present=$(echo "$node_present" | tr -d '[:space:]')
@@ -296,12 +319,20 @@ canary_check_node() {
                     peer_count=$(echo "$peer_count" | tr -d '[:space:]')
                     [ -z "$peer_count" ] && peer_count=0
 
+                    peer_addr=$(echo "$raft" | jq -r --arg id "$my_node_id" \
+                        '.data.config.servers[]? | select(.node_id == $id) | .address // ""' 2>/dev/null || echo "")
+                    peer_addr=$(echo "$peer_addr" | head -1 | tr -d '[:space:]')
+
                     if [ "$node_present" -eq 0 ] 2>/dev/null; then
                         log_info "  $my_node_id not yet in Raft peer list (${elapsed}s/${timeout}s)..."
                     elif [ "$is_voter" != "true" ]; then
                         log_info "  $my_node_id is non-voter, awaiting promotion (${elapsed}s/${timeout}s)..."
                     elif [ "$peer_count" -lt "$expected_peers" ] 2>/dev/null; then
                         log_info "  $my_node_id peer view=$peer_count/$expected_peers (${elapsed}s/${timeout}s)..."
+                    elif [ -n "$expected_raft_addr" ] \
+                        && [ "$peer_addr" != "$expected_raft_addr" ] \
+                        && [ "$peer_addr" != "$expected_raft_hostport" ]; then
+                        log_info "  $my_node_id Raft address=$peer_addr, expected=$expected_raft_addr (${elapsed}s/${timeout}s)..."
                     else
                         log_info "Canary PASS: $instance_id healthy (service=active, http=$http_code, voter=true, peers=$peer_count)"
                         return 0
@@ -332,7 +363,7 @@ wait_for_cluster_stable() {
 
     log_info "Waiting for cluster to stabilize with $expected_peers peers..."
 
-    while [ $elapsed -lt $max_wait ]; do
+    while [ "$elapsed" -lt "$max_wait" ]; do
         local health
         health=$(curl -sk "$VAULT_ADDR/v1/sys/health" 2>/dev/null || echo '{"sealed": true}')
         local sealed
@@ -374,7 +405,7 @@ step_down_leader() {
     local new_leader=""
 
     log_info "Waiting for new leader election (timeout ${max_wait}s)..."
-    while [ $elapsed -lt $max_wait ]; do
+    while [ "$elapsed" -lt "$max_wait" ]; do
         sleep $wait_interval
         elapsed=$((elapsed + wait_interval))
 
@@ -425,11 +456,8 @@ update_node() {
         exit 1
     fi
 
-    # Wait for old instance to fully terminate so auto_join won't discover it
-    log_info "Waiting for instance termination..."
-    aws ec2 wait instance-terminated \
-        --region "$AWS_REGION" \
-        --instance-ids "$instance_id" 2>/dev/null || true
+    # terminate-node.sh waits for instance termination and persistent resource release.
+    log_info "Old node terminated; persistent resources are available for replacement"
 
     # Launch new node (will use same node_id and rejoin Raft automatically)
     log_info "Launching new node..."
@@ -568,12 +596,17 @@ main() {
     echo ""
     log_warn "This will perform a rolling update of all Vault nodes."
     log_warn "Each node will be terminated and replaced one at a time."
-    echo ""
-    read -p "Continue with rolling update? (yes/no): " confirm
 
-    if [ "$confirm" != "yes" ]; then
-        log_info "Aborted"
-        exit 0
+    if [ "$AUTO_CONFIRM" == "true" ]; then
+        log_warn "Skipping interactive confirmation (--yes specified)"
+    else
+        echo ""
+        read -r -p "Continue with rolling update? (yes/no): " confirm
+
+        if [ "$confirm" != "yes" ]; then
+            log_info "Aborted"
+            exit 0
+        fi
     fi
 
     # Rolling update

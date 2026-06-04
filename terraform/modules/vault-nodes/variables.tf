@@ -33,6 +33,18 @@ variable "security_group_id" {
   description = "Security group ID for Vault nodes"
 }
 
+variable "additional_security_group_ids" {
+  type        = list(string)
+  default     = []
+  description = "Additional security group IDs to attach to the persistent Vault ENIs"
+}
+
+variable "network_interface_private_ips" {
+  type        = list(string)
+  default     = []
+  description = "Optional primary private IPs for persistent Vault ENIs, aligned by index with private_subnet_ids"
+}
+
 variable "iam_instance_profile" {
   type        = string
   description = "IAM instance profile name for Vault nodes"

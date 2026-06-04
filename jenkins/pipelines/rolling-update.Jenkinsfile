@@ -43,7 +43,7 @@ node {
                     withAwsAuth(envName, img) {
                         sh """
                             ${fetchToken}
-                            echo 'yes' | ./scripts/rolling-update.sh ${envName} ${skipFlag}
+                            ./scripts/rolling-update.sh ${envName} ${skipFlag} --yes
                         """
                     }
                 }

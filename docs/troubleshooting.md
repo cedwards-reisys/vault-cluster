@@ -256,9 +256,10 @@ Two of three AZs become unreachable simultaneously (regional outage, VPC /
 subnet misconfiguration, transit gateway failure). One node survives but
 has no quorum — Raft goes read-only / leaderless.
 
-**Persistent EBS implication:** the data in the lost AZs is still on disk
-(EBS volumes survive AZ outages as long as the AZ comes back). But until the
-other AZs return, the surviving node can't form quorum with itself.
+**Persistent resource implication:** the data and Raft addresses in the lost AZs
+are still reserved (EBS volumes and ENIs survive AZ outages as long as the AZ
+comes back). But until the other AZs return, the surviving node can't form
+quorum with itself.
 
 Triage:
 

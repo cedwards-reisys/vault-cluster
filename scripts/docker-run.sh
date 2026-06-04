@@ -8,7 +8,7 @@
 #
 # Examples:
 #   ./scripts/docker-run.sh
-#   ./scripts/docker-run.sh ./scripts/cluster-status.sh
+#   ./scripts/docker-run.sh ./scripts/cluster-status.sh nonprod-test
 #   ./scripts/docker-run.sh tofu plan
 
 set -euo pipefail

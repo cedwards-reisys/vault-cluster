@@ -18,6 +18,17 @@ variable "private_subnet_ids" {
   }
 }
 
+variable "vault_network_interface_private_ips" {
+  type        = list(string)
+  default     = []
+  description = "Optional primary private IPs for the persistent Vault ENIs, aligned by index with private_subnet_ids. Leave empty to let AWS choose once and retain the ENI-owned addresses."
+
+  validation {
+    condition     = length(var.vault_network_interface_private_ips) == 0 || length(var.vault_network_interface_private_ips) == 3
+    error_message = "vault_network_interface_private_ips must be empty or contain exactly 3 private IPs."
+  }
+}
+
 variable "acm_certificate_arn" {
   type        = string
   description = "ACM certificate ARN for vault.nonprod.example.io"

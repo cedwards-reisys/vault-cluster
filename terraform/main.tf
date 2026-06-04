@@ -36,8 +36,8 @@ module "secrets" {
 module "iam" {
   source = "./modules/iam"
 
-  cluster_name      = var.cluster_name
-  kms_key_arn       = module.kms.key_arn
+  cluster_name = var.cluster_name
+  kms_key_arn  = module.kms.key_arn
   secrets_manager_arns = [
     module.secrets.ca_cert_secret_arn,
     module.secrets.ca_key_secret_arn,
@@ -64,34 +64,36 @@ module "security_groups" {
 module "nlb" {
   source = "./modules/nlb"
 
-  vpc_id              = var.vpc_id
-  cluster_name        = var.cluster_name
-  private_subnet_ids  = var.private_subnet_ids
+  vpc_id                     = var.vpc_id
+  cluster_name               = var.cluster_name
+  private_subnet_ids         = var.private_subnet_ids
   acm_certificate_arn        = var.acm_certificate_arn
   enable_deletion_protection = var.enable_deletion_protection
   tags                       = local.common_tags
 }
 
-# Vault nodes - Persistent EBS volumes only
+# Vault nodes - Persistent EBS volumes and ENIs only
 # EC2 instances are managed by scripts, not Terraform
 module "vault_nodes" {
   source = "./modules/vault-nodes"
 
-  cluster_name         = var.cluster_name
-  vault_version        = var.vault_version
-  vault_domain         = var.vault_domain
-  instance_type        = var.instance_type
-  private_subnet_ids   = var.private_subnet_ids
-  availability_zones   = data.aws_subnet.private[*].availability_zone
-  security_group_id    = module.security_groups.vault_security_group_id
-  iam_instance_profile = module.iam.instance_profile_name
-  kms_key_id           = module.kms.key_id
-  ca_cert_secret_arn   = module.secrets.ca_cert_secret_arn
-  ca_key_secret_arn    = module.secrets.ca_key_secret_arn
-  aws_region           = var.aws_region
-  backup_enabled       = var.backup_enabled
-  backup_s3_bucket     = var.backup_s3_bucket
-  tags                 = local.common_tags
+  cluster_name                  = var.cluster_name
+  vault_version                 = var.vault_version
+  vault_domain                  = var.vault_domain
+  instance_type                 = var.instance_type
+  private_subnet_ids            = var.private_subnet_ids
+  availability_zones            = data.aws_subnet.private[*].availability_zone
+  security_group_id             = module.security_groups.vault_security_group_id
+  additional_security_group_ids = var.additional_security_group_ids
+  network_interface_private_ips = var.vault_network_interface_private_ips
+  iam_instance_profile          = module.iam.instance_profile_name
+  kms_key_id                    = module.kms.key_id
+  ca_cert_secret_arn            = module.secrets.ca_cert_secret_arn
+  ca_key_secret_arn             = module.secrets.ca_key_secret_arn
+  aws_region                    = var.aws_region
+  backup_enabled                = var.backup_enabled
+  backup_s3_bucket              = var.backup_s3_bucket
+  tags                          = local.common_tags
 }
 
 # Monitoring — CloudWatch alarms
@@ -121,19 +123,21 @@ resource "aws_ssm_parameter" "cluster_name" {
 }
 
 resource "aws_ssm_parameter" "vault_config" {
-  name  = "/${var.cluster_name}/config/vault-config"
-  type  = "String"
+  name = "/${var.cluster_name}/config/vault-config"
+  type = "String"
   value = jsonencode({
-    aws_region              = var.aws_region
-    nlb_dns_name            = module.nlb.dns_name
-    nlb_arn_suffix          = module.nlb.arn_suffix
-    target_group_arn        = module.nlb.target_group_arn
-    target_group_arn_suffix = module.nlb.target_group_arn_suffix
-    kms_key_id              = module.kms.key_id
-    instance_type           = var.instance_type
-    private_subnet_ids      = var.private_subnet_ids
-    instance_tags                 = var.instance_tags
-    additional_security_group_ids = var.additional_security_group_ids
+    aws_region                          = var.aws_region
+    nlb_dns_name                        = module.nlb.dns_name
+    nlb_arn_suffix                      = module.nlb.arn_suffix
+    target_group_arn                    = module.nlb.target_group_arn
+    target_group_arn_suffix             = module.nlb.target_group_arn_suffix
+    kms_key_id                          = module.kms.key_id
+    instance_type                       = var.instance_type
+    private_subnet_ids                  = var.private_subnet_ids
+    vault_network_interface_ids         = module.vault_nodes.network_interface_ids
+    vault_network_interface_private_ips = module.vault_nodes.network_interface_private_ips
+    instance_tags                       = var.instance_tags
+    additional_security_group_ids       = var.additional_security_group_ids
   })
   tags = local.common_tags
 }

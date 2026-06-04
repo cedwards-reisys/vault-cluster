@@ -5,8 +5,9 @@
 # This script:
 # 1. Deregisters from the NLB target group
 # 2. Optionally removes the node from Raft (--remove-from-raft flag)
-# 3. Detaches the EBS data volume (preserving data)
-# 4. Terminates the EC2 instance
+# 3. Preserves the primary ENI and EBS data volume
+# 4. Terminates the EC2 instance so the OS can stop Vault and unmount cleanly
+# 5. Waits for the persistent ENI and EBS data volume to become available
 #
 # Usage: ./terminate-node.sh <env> <instance-id> [--remove-from-raft] [--yes]
 #
@@ -68,6 +69,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resolve environment, cluster name, and region
+# shellcheck source=scripts/resolve-env.sh
 source "$SCRIPT_DIR/resolve-env.sh" "$ENV"
 
 # Colors
@@ -126,12 +128,24 @@ get_instance_details() {
 
     # Get attached data volume (not the root volume)
     DATA_VOLUME_ID=$(echo "$instance_info" | jq -r '.BlockDeviceMappings[] | select(.DeviceName=="/dev/xvdf") | .Ebs.VolumeId // empty')
+    DATA_VOLUME_DELETE_ON_TERMINATION=$(echo "$instance_info" | jq -r '.BlockDeviceMappings[] | select(.DeviceName=="/dev/xvdf") | .Ebs.DeleteOnTermination // empty')
+
+    # Get primary network interface. This ENI owns the Raft cluster_addr IP.
+    PRIMARY_NETWORK_INTERFACE_ID=$(echo "$instance_info" | jq -r '.NetworkInterfaces[]? | select(.Attachment.DeviceIndex==0) | .NetworkInterfaceId // empty')
+    PRIMARY_NETWORK_INTERFACE_ATTACHMENT_ID=$(echo "$instance_info" | jq -r '.NetworkInterfaces[]? | select(.Attachment.DeviceIndex==0) | .Attachment.AttachmentId // empty')
+    PRIMARY_NETWORK_INTERFACE_DELETE_ON_TERMINATION=$(echo "$instance_info" | jq -r '.NetworkInterfaces[]? | select(.Attachment.DeviceIndex==0) | .Attachment.DeleteOnTermination // empty')
+    PRIMARY_PRIVATE_IP=$(echo "$instance_info" | jq -r '.NetworkInterfaces[]? | select(.Attachment.DeviceIndex==0) | .PrivateIpAddress // empty')
 
     log_info "Instance: $INSTANCE_NAME"
     log_info "State: $INSTANCE_STATE"
     log_info "AZ: $INSTANCE_AZ"
+    if [ -n "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+        log_info "Primary ENI: $PRIMARY_NETWORK_INTERFACE_ID ($PRIMARY_PRIVATE_IP)"
+    else
+        log_warn "No primary ENI found"
+    fi
     if [ -n "$DATA_VOLUME_ID" ]; then
-        log_info "Data Volume: $DATA_VOLUME_ID"
+        log_info "Data Volume: $DATA_VOLUME_ID (delete_on_termination=$DATA_VOLUME_DELETE_ON_TERMINATION)"
     else
         log_warn "No data volume found at /dev/xvdf"
     fi
@@ -187,6 +201,62 @@ remove_from_raft() {
     fi
 }
 
+# Preserve the primary ENI so its private IP remains reserved for replacement.
+preserve_network_interface() {
+    if [ -z "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+        log_warn "No primary ENI to preserve"
+        return 0
+    fi
+
+    if [ -z "$PRIMARY_NETWORK_INTERFACE_ATTACHMENT_ID" ]; then
+        log_warn "Primary ENI has no attachment ID; skipping delete-on-termination update"
+        return 0
+    fi
+
+    if [ "$PRIMARY_NETWORK_INTERFACE_DELETE_ON_TERMINATION" == "false" ]; then
+        log_info "Primary ENI already preserved on termination"
+        return 0
+    fi
+
+    log_info "Preserving primary ENI on termination: $PRIMARY_NETWORK_INTERFACE_ID"
+    aws ec2 modify-network-interface-attribute \
+        --region "$AWS_REGION" \
+        --network-interface-id "$PRIMARY_NETWORK_INTERFACE_ID" \
+        --attachment "AttachmentId=$PRIMARY_NETWORK_INTERFACE_ATTACHMENT_ID,DeleteOnTermination=false"
+
+    log_info "Primary ENI will survive instance termination"
+}
+
+# Preserve the data volume so EC2 termination releases it instead of deleting it.
+preserve_data_volume() {
+    if [ -z "$DATA_VOLUME_ID" ]; then
+        log_warn "No data volume to preserve"
+        return 0
+    fi
+
+    if [ "$DATA_VOLUME_DELETE_ON_TERMINATION" == "false" ]; then
+        log_info "Data volume already preserved on termination"
+        return 0
+    fi
+
+    if [ "$DATA_VOLUME_DELETE_ON_TERMINATION" != "true" ]; then
+        log_error "Cannot determine DeleteOnTermination for data volume $DATA_VOLUME_ID"
+        log_error "Refusing to terminate until an operator confirms the volume will be preserved"
+        return 1
+    fi
+
+    log_warn "Data volume is currently delete-on-termination=true"
+    log_info "Preserving data volume on termination: $DATA_VOLUME_ID"
+
+    aws ec2 modify-instance-attribute \
+        --region "$AWS_REGION" \
+        --instance-id "$INSTANCE_ID" \
+        --block-device-mappings "[{\"DeviceName\":\"/dev/xvdf\",\"Ebs\":{\"DeleteOnTermination\":false}}]"
+
+    DATA_VOLUME_DELETE_ON_TERMINATION=false
+    log_info "Data volume will survive instance termination"
+}
+
 # Remove vault-cluster tag so auto_join never discovers this instance
 remove_cluster_tag() {
     log_info "Removing vault-cluster tag (prevent auto_join discovery)..."
@@ -211,22 +281,14 @@ deregister_from_target_group() {
     log_info "Deregistered from target group"
 }
 
-# Detach EBS volume
-detach_ebs_volume() {
+# Wait for EC2 termination to release the preserved data volume.
+wait_for_data_volume_available() {
     if [ -z "$DATA_VOLUME_ID" ]; then
-        log_warn "No data volume to detach"
+        log_warn "No data volume to wait for"
         return 0
     fi
 
-    log_info "Detaching EBS volume $DATA_VOLUME_ID..."
-
-    aws ec2 detach-volume \
-        --region "$AWS_REGION" \
-        --volume-id "$DATA_VOLUME_ID" \
-        --force \
-        --output json | jq '.' || true
-
-    log_info "Waiting for volume to detach..."
+    log_info "Waiting for data volume to become available..."
     local max_wait=120
     local elapsed=0
 
@@ -239,7 +301,7 @@ detach_ebs_volume() {
             --output text 2>/dev/null || echo "unknown")
 
         if [ "$state" == "available" ]; then
-            log_info "Volume detached"
+            log_info "Data volume is available"
             return 0
         fi
 
@@ -247,7 +309,9 @@ detach_ebs_volume() {
         elapsed=$((elapsed + 5))
     done
 
-    log_warn "Volume detach timed out - will be detached when instance terminates"
+    log_error "Data volume did not become available within ${max_wait}s"
+    log_error "Manual intervention required for volume: $DATA_VOLUME_ID"
+    return 1
 }
 
 # Terminate instance
@@ -260,6 +324,50 @@ terminate_instance() {
         --output json | jq '.'
 
     log_info "Instance termination initiated"
+}
+
+# Wait for the instance to finish shutting down. EC2 termination gives systemd
+# a chance to stop Vault and unmount the data volume cleanly.
+wait_for_instance_terminated() {
+    log_info "Waiting for instance to terminate..."
+
+    aws ec2 wait instance-terminated \
+        --region "$AWS_REGION" \
+        --instance-ids "$INSTANCE_ID"
+
+    log_info "Instance is terminated"
+}
+
+# Wait for persistent ENI to detach after instance termination.
+wait_for_network_interface_available() {
+    if [ -z "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+        return 0
+    fi
+
+    log_info "Waiting for primary ENI to become available..."
+    local max_wait=180
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        local state
+        state=$(aws ec2 describe-network-interfaces \
+            --region "$AWS_REGION" \
+            --network-interface-ids "$PRIMARY_NETWORK_INTERFACE_ID" \
+            --query 'NetworkInterfaces[0].Status' \
+            --output text 2>/dev/null || echo "deleted")
+
+        if [ "$state" == "available" ]; then
+            log_info "Primary ENI is available"
+            return 0
+        fi
+
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    log_error "Primary ENI did not become available within ${max_wait}s"
+    log_error "Inspect ENI: $PRIMARY_NETWORK_INTERFACE_ID"
+    return 1
 }
 
 # Main execution
@@ -287,6 +395,9 @@ main() {
     if [ -n "$DATA_VOLUME_ID" ]; then
         echo "  Data Vol:  $DATA_VOLUME_ID (will be preserved)"
     fi
+    if [ -n "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+        echo "  ENI:       $PRIMARY_NETWORK_INTERFACE_ID ($PRIMARY_PRIVATE_IP, will be preserved)"
+    fi
     echo ""
 
     log_warn "This will:"
@@ -296,12 +407,13 @@ main() {
     else
         echo "  2. NOT remove from Raft (replacement will rejoin automatically)"
     fi
-    echo "  3. Detach data volume (preserving data)"
-    echo "  4. Terminate the EC2 instance"
+    echo "  3. Preserve primary ENI (reserving the Raft IP)"
+    echo "  4. Preserve data volume (EC2 termination will release it)"
+    echo "  5. Terminate the EC2 instance"
 
     if [ "$AUTO_CONFIRM" != "true" ]; then
         echo ""
-        read -p "Continue? (yes/no): " confirm
+        read -r -p "Continue? (yes/no): " confirm
         if [ "$confirm" != "yes" ]; then
             log_info "Aborted"
             exit 0
@@ -326,7 +438,7 @@ main() {
             local max_wait=60
             local wait_interval=5
             local elapsed=0
-            while [ $elapsed -lt $max_wait ]; do
+            while [ "$elapsed" -lt "$max_wait" ]; do
                 sleep $wait_interval
                 elapsed=$((elapsed + wait_interval))
                 local new_leader
@@ -339,7 +451,7 @@ main() {
                 log_info "Waiting for new leader election (${elapsed}s/${max_wait}s)..."
             done
 
-            if [ $elapsed -ge $max_wait ]; then
+            if [ "$elapsed" -ge "$max_wait" ]; then
                 log_warn "Timed out waiting for new leader - proceeding with termination"
             fi
         fi
@@ -348,8 +460,12 @@ main() {
     remove_from_raft
     deregister_from_target_group
     remove_cluster_tag
-    detach_ebs_volume
+    preserve_network_interface
+    preserve_data_volume
     terminate_instance
+    wait_for_instance_terminated
+    wait_for_data_volume_available
+    wait_for_network_interface_available
 
     echo ""
     echo "=================================="
@@ -357,6 +473,9 @@ main() {
     echo "=================================="
     echo ""
     echo "The EBS volume $DATA_VOLUME_ID has been preserved."
+    if [ -n "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+        echo "The primary ENI $PRIMARY_NETWORK_INTERFACE_ID has been preserved."
+    fi
     echo "To launch a replacement node: ./launch-node.sh $VAULT_ENV <az-index>"
     echo ""
     echo "Current Raft peers:"

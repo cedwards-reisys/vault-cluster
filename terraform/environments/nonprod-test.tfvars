@@ -13,6 +13,13 @@ private_subnet_ids = [
   "subnet-cccccccc", # us-east-1c
 ]
 
+# Optional: primary private IPs for persistent Vault ENIs, aligned with private_subnet_ids.
+# vault_network_interface_private_ips = [
+#   "10.0.1.20", # us-east-1a
+#   "10.0.2.20", # us-east-1b
+#   "10.0.3.20", # us-east-1c
+# ]
+
 # TLS Certificate
 acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
@@ -26,7 +33,7 @@ environment   = "nonprod-test"
 instance_type = "m8g.medium"
 
 # Access Control
-allowed_cidr_blocks = ["10.0.0.0/8"]  # placeholder — override per-env
+allowed_cidr_blocks = ["10.0.0.0/8"] # placeholder — override per-env
 
 # SSM Session Manager Logging
 ssm_logs_s3_bucket = "ssm-session-logs-nonprod"

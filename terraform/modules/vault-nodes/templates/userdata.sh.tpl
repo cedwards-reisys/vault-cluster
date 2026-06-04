@@ -56,13 +56,12 @@ dnf config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/has
 # Install Vault
 dnf install -y vault-$${VAULT_VERSION}
 
-# Wait for the data EBS volume to be attached, then resolve its device
-# path (xen or NVMe).
-echo "Waiting for data EBS volume to attach..."
+# Wait for the data EBS volume to be attached at the configured device path.
+echo "Waiting for data EBS volume to attach at $DATA_DEVICE..."
 MAX_WAIT=300
 ELAPSED=0
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if resolve_data_device; then
+    if [ -b "$DATA_DEVICE" ]; then
         break
     fi
     sleep 5
@@ -70,13 +69,13 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     echo "Still waiting for data volume... ($ELAPSED/$MAX_WAIT seconds)"
 done
 
-if [ -z "$DATA_DEVICE" ] || [ ! -b "$DATA_DEVICE" ]; then
+if [ ! -b "$DATA_DEVICE" ]; then
     echo "ERROR: Data volume not found after $MAX_WAIT seconds"
-    echo "ERROR: Checked /dev/xvdf and /dev/nvme*n1 (non-root)"
+    echo "ERROR: Expected block device at $DATA_DEVICE"
     exit 1
 fi
 
-echo "Data volume resolved: $DATA_DEVICE"
+echo "Data volume found: $DATA_DEVICE"
 
 # Check if the volume needs formatting (new volume)
 if ! blkid "$DATA_DEVICE" >/dev/null 2>&1; then

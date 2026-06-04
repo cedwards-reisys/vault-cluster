@@ -68,6 +68,16 @@ output "ebs_volume_azs" {
   value       = module.vault_nodes.ebs_volume_azs
 }
 
+output "vault_network_interface_ids" {
+  description = "Persistent ENI IDs for Vault nodes"
+  value       = module.vault_nodes.network_interface_ids
+}
+
+output "vault_network_interface_private_ips" {
+  description = "Primary private IPs of the persistent Vault ENIs"
+  value       = module.vault_nodes.network_interface_private_ips
+}
+
 output "ami_id" {
   description = "AMI ID for Vault nodes"
   value       = module.vault_nodes.ami_id

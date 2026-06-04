@@ -3,7 +3,7 @@
 # resolve-env.sh — shared helper sourced by operational scripts
 #
 # Sets: VAULT_ENV, CLUSTER_NAME, AWS_REGION
-# Provides: ssm_get, cfg_get, lookup_ebs_volumes
+# Provides: ssm_get, cfg_get, lookup_ebs_volumes, lookup_network_interfaces
 #
 # Usage (from calling script):
 #   source "$(dirname "${BASH_SOURCE[0]}")/resolve-env.sh" "$env"
@@ -80,4 +80,30 @@ lookup_ebs_volumes() {
         EBS_VOLUME_IDS+=("$vol_id")
         EBS_VOLUME_AZS+=("$az")
     done < <(echo "$volumes_json" | jq -r 'sort_by(.[1]) | .[] | "\(.[0])\t\(.[1])"')
+}
+
+# Look up persistent Vault ENIs by cluster tag.
+# Sets: NETWORK_INTERFACE_IDS, NETWORK_INTERFACE_AZS,
+# NETWORK_INTERFACE_PRIVATE_IPS, NETWORK_INTERFACE_SUBNET_IDS arrays
+# (sorted by AZ)
+lookup_network_interfaces() {
+    local enis_json
+    enis_json=$(aws ec2 describe-network-interfaces \
+        --region "$AWS_REGION" \
+        --filters \
+            "Name=tag:vault-cluster,Values=$CLUSTER_NAME" \
+            "Name=tag:vault-role,Values=raft-network" \
+        --query 'NetworkInterfaces[*].[NetworkInterfaceId,AvailabilityZone,PrivateIpAddress,SubnetId]' \
+        --output json)
+
+    NETWORK_INTERFACE_IDS=()
+    NETWORK_INTERFACE_AZS=()
+    NETWORK_INTERFACE_PRIVATE_IPS=()
+    NETWORK_INTERFACE_SUBNET_IDS=()
+    while IFS=$'\t' read -r eni_id az private_ip subnet_id; do
+        NETWORK_INTERFACE_IDS+=("$eni_id")
+        NETWORK_INTERFACE_AZS+=("$az")
+        NETWORK_INTERFACE_PRIVATE_IPS+=("$private_ip")
+        NETWORK_INTERFACE_SUBNET_IDS+=("$subnet_id")
+    done < <(echo "$enis_json" | jq -r 'sort_by(.[1]) | .[] | "\(.[0])\t\(.[1])\t\(.[2])\t\(.[3])"')
 }

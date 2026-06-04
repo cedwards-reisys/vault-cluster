@@ -171,7 +171,7 @@ Terminates an EC2 instance with approval gate.
 
 #### rolling-update
 
-Replaces all nodes one at a time. Pre-flight health check, approval gate, then automated replacement.
+Replaces all nodes one at a time. Pre-flight health check, approval gate, then automated replacement. The job calls `rolling-update.sh` with `--yes` after Jenkins approval so it does not depend on stdin.
 
 - **Parameters**: `SKIP_TERRAFORM` — skip tofu apply, just replace nodes
 - **Approval required**

@@ -127,7 +127,7 @@ tofu init
 # Review the plan
 tofu plan
 
-# Apply (creates KMS, IAM, security groups, NLB, EBS volumes)
+# Apply (creates KMS, IAM, security groups, NLB, EBS volumes, ENIs)
 tofu apply
 ```
 
@@ -137,6 +137,7 @@ This creates:
 - Security groups
 - Network Load Balancer
 - Persistent EBS volumes (one per AZ)
+- Persistent ENIs (one per AZ)
 - Self-signed CA in Secrets Manager
 
 **Note**: No EC2 instances are created yet.
@@ -155,7 +156,7 @@ Save this value - you'll need it for the DNS cutover.
 
 ```bash
 # Launch node in first AZ
-./scripts/launch-node.sh --yes 0
+./scripts/launch-node.sh <env> 0 --yes
 
 # Wait for instance to be running
 # The script will output the instance ID
@@ -235,13 +236,13 @@ Compare against the inventory from pre-migration checklist.
 
 ```bash
 # Launch node in second AZ
-./scripts/launch-node.sh --yes 1
+./scripts/launch-node.sh <env> 1 --yes
 
 # Wait for it to join (check cluster status)
 ./scripts/cluster-status.sh
 
 # Launch node in third AZ
-./scripts/launch-node.sh --yes 2
+./scripts/launch-node.sh <env> 2 --yes
 
 # Verify all nodes joined
 ./scripts/cluster-status.sh
