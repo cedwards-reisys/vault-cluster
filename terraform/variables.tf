@@ -29,6 +29,16 @@ variable "vault_network_interface_private_ips" {
   }
 }
 
+variable "kms_key_id" {
+  type        = string
+  description = "Pre-existing KMS key for Vault auto-unseal. Accepts a key ID, key ARN, alias name (alias/...), or alias ARN. The key is not managed by Terraform."
+
+  validation {
+    condition     = length(var.kms_key_id) > 0
+    error_message = "kms_key_id is required — supply the auto-unseal KMS key ID, ARN, or alias."
+  }
+}
+
 variable "acm_certificate_arn" {
   type        = string
   description = "ACM certificate ARN for vault.nonprod.example.io"

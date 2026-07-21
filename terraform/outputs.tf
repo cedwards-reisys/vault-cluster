@@ -15,12 +15,12 @@ output "nlb_zone_id" {
 
 output "kms_key_id" {
   description = "KMS key ID used for Vault auto-unseal"
-  value       = module.kms.key_id
+  value       = data.aws_kms_key.vault_unseal.key_id
 }
 
 output "kms_key_arn" {
   description = "KMS key ARN used for Vault auto-unseal"
-  value       = module.kms.key_arn
+  value       = data.aws_kms_key.vault_unseal.arn
 }
 
 output "vault_security_group_ids" {

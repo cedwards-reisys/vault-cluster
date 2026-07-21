@@ -16,12 +16,10 @@ data "aws_subnet" "private" {
   id    = var.private_subnet_ids[count.index]
 }
 
-# KMS key for Vault auto-unseal
-module "kms" {
-  source = "./modules/kms"
-
-  cluster_name = var.cluster_name
-  tags         = local.common_tags
+# KMS key for Vault auto-unseal — pre-existing, supplied per environment.
+# Accepts a key ID, key ARN, alias name ("alias/..."), or alias ARN.
+data "aws_kms_key" "vault_unseal" {
+  key_id = var.kms_key_id
 }
 
 # Secrets Manager — CA certs (read-only) + Vault credential placeholders
@@ -37,7 +35,7 @@ module "iam" {
   source = "./modules/iam"
 
   cluster_name = var.cluster_name
-  kms_key_arn  = module.kms.key_arn
+  kms_key_arn  = data.aws_kms_key.vault_unseal.arn
   secrets_manager_arns = [
     module.secrets.ca_cert_secret_arn,
     module.secrets.ca_key_secret_arn,
@@ -87,7 +85,7 @@ module "vault_nodes" {
   additional_security_group_ids = var.additional_security_group_ids
   network_interface_private_ips = var.vault_network_interface_private_ips
   iam_instance_profile          = module.iam.instance_profile_name
-  kms_key_id                    = module.kms.key_id
+  kms_key_id                    = data.aws_kms_key.vault_unseal.key_id
   ca_cert_secret_arn            = module.secrets.ca_cert_secret_arn
   ca_key_secret_arn             = module.secrets.ca_key_secret_arn
   aws_region                    = var.aws_region
@@ -131,7 +129,7 @@ resource "aws_ssm_parameter" "vault_config" {
     nlb_arn_suffix                      = module.nlb.arn_suffix
     target_group_arn                    = module.nlb.target_group_arn
     target_group_arn_suffix             = module.nlb.target_group_arn_suffix
-    kms_key_id                          = module.kms.key_id
+    kms_key_id                          = data.aws_kms_key.vault_unseal.key_id
     instance_type                       = var.instance_type
     private_subnet_ids                  = var.private_subnet_ids
     vault_network_interface_ids         = module.vault_nodes.network_interface_ids

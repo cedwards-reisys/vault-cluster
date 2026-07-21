@@ -23,6 +23,10 @@ private_subnet_ids = [
 # TLS Certificate
 acm_certificate_arn = "arn:aws:acm:us-east-1:987654321098:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
+# KMS key for Vault auto-unseal (pre-existing, not managed by Terraform)
+# Accepts a key ID, key ARN, alias name ("alias/..."), or alias ARN
+kms_key_id = "alias/vault-prod-unseal"
+
 # Vault Configuration
 cluster_name  = "vault-prod"
 vault_domain  = "vault.prod.example.io"

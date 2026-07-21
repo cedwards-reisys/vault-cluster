@@ -110,8 +110,7 @@ This creates a self-signed CA and stores it in AWS Secrets Manager.
 ```
 
 This creates:
-- KMS key for auto-unseal
-- IAM roles and policies
+- IAM roles and policies (grants unseal access to the pre-existing KMS key set via `kms_key_id` in the environment tfvars)
 - Security groups
 - Network Load Balancer
 - Persistent EBS volumes and ENIs (one pair per AZ)
@@ -195,7 +194,7 @@ vault-cluster/
 │   │   ├── nonprod.hcl
 │   │   └── prod.hcl
 │   └── modules/
-│       ├── kms/                 # KMS key + CA cert + Secrets Manager secrets
+│       ├── secrets/             # CA cert + Secrets Manager secrets
 │       ├── iam/                 # IAM roles and policies
 │       ├── security-groups/     # Security groups
 │       ├── nlb/                 # Network Load Balancer
